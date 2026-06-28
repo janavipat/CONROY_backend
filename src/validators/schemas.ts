@@ -32,6 +32,19 @@ export const authSchema = z.object({
   firstName: z.string().max(120).optional(),
 });
 
+// Phone OTP — accepts a 10-digit local number or a full E.164 (+CC…) number.
+export const phoneStartSchema = z.object({
+  phone: z
+    .string()
+    .trim()
+    .regex(/^\+?[0-9\s-]{8,16}$/, "Enter a valid phone number"),
+});
+
+export const phoneVerifySchema = z.object({
+  phone: z.string().trim().min(8),
+  code: z.string().trim().regex(/^[0-9]{4,8}$/, "Enter the code sent to your phone"),
+});
+
 export type ContactInput = z.infer<typeof contactSchema>;
 export type NewsletterInput = z.infer<typeof newsletterSchema>;
 export type CreateOrderInput = z.infer<typeof createOrderSchema>;

@@ -3,12 +3,23 @@ import { z } from "zod";
 
 /** Validates and exposes a typed, fail-fast view of the environment. */
 const EnvSchema = z.object({
-  SUPABASE_URL: z.string().url("SUPABASE_URL must be a valid URL"),
-  SUPABASE_ANON_KEY: z.string().min(1, "SUPABASE_ANON_KEY is required"),
-  SUPABASE_SERVICE_ROLE_KEY: z.string().min(1, "SUPABASE_SERVICE_ROLE_KEY is required"),
+  // Supabase is optional so the server can boot in OTP mock mode before keys
+  // are configured. Catalog/orders/real-auth require these to be set.
+  SUPABASE_URL: z.string().default(""),
+  SUPABASE_ANON_KEY: z.string().default(""),
+  SUPABASE_SERVICE_ROLE_KEY: z.string().default(""),
+
   PORT: z.coerce.number().default(4000),
   NODE_ENV: z.enum(["development", "production", "test"]).default("development"),
   CORS_ORIGINS: z.string().default("http://localhost:3000"),
+
+  // Phone OTP. In mock mode no real SMS is sent and OTP_TEST_CODE is accepted,
+  // so the full login flow can be built/tested before a Supabase SMS provider
+  // (Twilio/MSG91 + DLT) is configured.
+  OTP_MOCK: z.string().default("true"),
+  OTP_TEST_CODE: z.string().default("123456"),
+  // Default country code applied to bare local numbers (India).
+  OTP_DEFAULT_COUNTRY_CODE: z.string().default("+91"),
 });
 
 const parsed = EnvSchema.safeParse(process.env);
@@ -18,12 +29,28 @@ if (!parsed.success) {
   for (const issue of parsed.error.issues) {
     console.error(`   • ${issue.path.join(".")}: ${issue.message}`);
   }
-  console.error("\n👉 Copy .env.example to .env and fill in your Supabase keys.\n");
   process.exit(1);
+}
+
+const supabaseConfigured = parsed.data.SUPABASE_URL.startsWith("http");
+
+if (!supabaseConfigured) {
+  console.warn(
+    "⚠️  Supabase not configured — catalog, orders and real auth are disabled.\n" +
+      "   Phone OTP runs in MOCK mode. Add SUPABASE_* keys to .env to enable everything.\n",
+  );
 }
 
 export const env = {
   ...parsed.data,
+  // Fall back to harmless placeholders so the Supabase client can be created
+  // without throwing when keys are absent (those endpoints simply won't work).
+  SUPABASE_URL: supabaseConfigured ? parsed.data.SUPABASE_URL : "https://placeholder.supabase.co",
+  SUPABASE_ANON_KEY: parsed.data.SUPABASE_ANON_KEY || "placeholder-anon-key",
+  SUPABASE_SERVICE_ROLE_KEY: parsed.data.SUPABASE_SERVICE_ROLE_KEY || "placeholder-service-key",
+  supabaseConfigured,
   corsOrigins: parsed.data.CORS_ORIGINS.split(",").map((s) => s.trim()).filter(Boolean),
   isProd: parsed.data.NODE_ENV === "production",
+  // Force mock OTP whenever Supabase isn't configured (can't send real SMS).
+  otpMock: parsed.data.OTP_MOCK !== "false" || !supabaseConfigured,
 };

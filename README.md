@@ -54,6 +54,8 @@ Base URL: `http://localhost:4000`
 | POST | `/api/auth/register` | Supabase Auth sign-up |
 | POST | `/api/auth/login` | Supabase Auth sign-in (returns session) |
 | GET | `/api/auth/me` | Current user (Bearer access token) |
+| POST | `/api/auth/phone/start` | Send OTP to a phone (SMS) — `{ phone }` |
+| POST | `/api/auth/phone/verify` | Verify OTP, return session — `{ phone, code }` |
 
 All responses are `{ ok: boolean, ... }`. Validation errors return `422` with details.
 
@@ -122,6 +124,33 @@ Supabase too, swap the imports in the frontend pages from `lib/products.ts` to a
 keeps working out of the box).
 
 ---
+
+## 📱 Phone OTP login (SMS)
+
+Phone-number login is built on **Supabase phone auth** (SMS only — no voice call).
+
+### Mock mode (default — works now, no provider needed)
+With `OTP_MOCK=true` (or whenever Supabase isn't configured), no real SMS is sent
+and the fixed `OTP_TEST_CODE` (default `123456`) is accepted. This lets you build and
+test the entire login flow locally:
+
+```bash
+curl -X POST http://localhost:4000/api/auth/phone/start  -H "Content-Type: application/json" -d '{"phone":"9998009904"}'
+curl -X POST http://localhost:4000/api/auth/phone/verify -H "Content-Type: application/json" -d '{"phone":"9998009904","code":"123456"}'
+```
+
+Bare 10-digit numbers are normalised to E.164 using `OTP_DEFAULT_COUNTRY_CODE` (`+91`).
+
+### Enabling real SMS (production)
+1. In the **Supabase Dashboard → Authentication → Providers → Phone**, enable **Phone**.
+2. Connect an **SMS provider** (Twilio, MessageBird, Vonage, Textlocal or MSG91 via custom hook).
+3. **India:** complete **DLT registration** (TRAI requirement for transactional SMS) and
+   register your OTP template with the provider — this can take a few days.
+4. Set `OTP_MOCK=false` in `backend/.env` and add your `SUPABASE_*` keys.
+
+> Voice-call OTP is **not** supported by Supabase phone auth. To add a "call" channel,
+> swap the delivery layer for **Twilio Verify** (`channel: "call"`) and mint the Supabase
+> session after verification.
 
 ## 🔐 Security notes
 

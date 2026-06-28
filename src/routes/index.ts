@@ -4,7 +4,13 @@ import { getProduct, listProducts } from "../controllers/products.controller.js"
 import { getCollection, listCollections } from "../controllers/collections.controller.js";
 import { submitContact, subscribeNewsletter } from "../controllers/engagement.controller.js";
 import { createOrder, getOrder } from "../controllers/orders.controller.js";
-import { login, me, register } from "../controllers/auth.controller.js";
+import {
+  login,
+  me,
+  register,
+  startPhoneOtp,
+  verifyPhoneOtp,
+} from "../controllers/auth.controller.js";
 
 export const router = Router();
 
@@ -26,3 +32,7 @@ router.get("/orders/:id", asyncHandler(getOrder));
 router.post("/auth/register", asyncHandler(register));
 router.post("/auth/login", asyncHandler(login));
 router.get("/auth/me", asyncHandler(me));
+
+// Phone OTP login
+router.post("/auth/phone/start", asyncHandler(startPhoneOtp));
+router.post("/auth/phone/verify", asyncHandler(verifyPhoneOtp));
