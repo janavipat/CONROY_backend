@@ -46,7 +46,8 @@ export async function createOrder(req: Request, res: Response) {
       shipping_address: input.shippingAddress ?? null,
       subtotal,
       currency,
-      status: "pending",
+      // COD orders await collection on delivery; online orders are paid.
+      status: input.paymentMethod === "cod" ? "cod_pending" : "paid",
     })
     .select()
     .single();
