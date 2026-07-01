@@ -33,6 +33,9 @@ const EnvSchema = z.object({
   SMTP_USER: z.string().default(""),
   SMTP_PASS: z.string().default(""),
   SMTP_FROM: z.string().default(""),
+
+  // Admin panel key. Required as `x-admin-key` on /api/admin/* when set.
+  ADMIN_KEY: z.string().default(""),
 });
 
 const parsed = EnvSchema.safeParse(process.env);
@@ -52,6 +55,10 @@ if (!supabaseConfigured) {
     "⚠️  Supabase not configured — catalog, orders and real auth are disabled.\n" +
       "   Phone OTP runs in MOCK mode. Add SUPABASE_* keys to .env to enable everything.\n",
   );
+}
+
+if (!parsed.data.ADMIN_KEY) {
+  console.warn("⚠️  ADMIN_KEY is not set — the /admin API is OPEN. Set it before deploying.\n");
 }
 
 export const env = {

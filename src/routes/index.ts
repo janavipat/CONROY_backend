@@ -1,6 +1,7 @@
 import { Router } from "express";
 import multer from "multer";
 import { asyncHandler } from "../middleware/asyncHandler.js";
+import { requireAdmin } from "../middleware/adminAuth.js";
 import { getProduct, listProducts } from "../controllers/products.controller.js";
 import { getCollection, listCollections } from "../controllers/collections.controller.js";
 import { submitContact, subscribeNewsletter } from "../controllers/engagement.controller.js";
@@ -63,7 +64,10 @@ router.get("/auth/me", asyncHandler(me));
 router.post("/auth/phone/start", asyncHandler(startPhoneOtp));
 router.post("/auth/phone/verify", asyncHandler(verifyPhoneOtp));
 
-// Admin — product management + image upload to Supabase Storage
+// Admin — everything under /admin requires the admin key (x-admin-key header).
+router.use("/admin", requireAdmin);
+// Lightweight endpoint the frontend uses to validate the entered key.
+router.get("/admin/verify", (_req, res) => res.json({ ok: true }));
 router.post("/admin/upload", upload.single("file"), asyncHandler(uploadImage));
 router.post("/admin/products", asyncHandler(createProduct));
 router.put("/admin/products/:handle", asyncHandler(updateProduct));
