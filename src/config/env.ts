@@ -71,10 +71,7 @@ export const env = {
   supabaseConfigured,
   corsOrigins: parsed.data.CORS_ORIGINS.split(",").map((s) => s.trim()).filter(Boolean),
   isProd: parsed.data.NODE_ENV === "production",
-  // MSG91 is the OTP provider. Real OTP needs both the auth key and a template.
-  msg91Configured: Boolean(parsed.data.MSG91_AUTH_KEY && parsed.data.MSG91_TEMPLATE_ID),
-  // Force mock OTP unless MSG91 is configured (can't send real SMS otherwise).
-  otpMock:
-    parsed.data.OTP_MOCK !== "false" ||
-    !(parsed.data.MSG91_AUTH_KEY && parsed.data.MSG91_TEMPLATE_ID),
+  // OTP is sent by Supabase phone auth (via the provider configured in Supabase,
+  // e.g. Twilio). Force mock OTP unless Supabase is configured.
+  otpMock: parsed.data.OTP_MOCK !== "false" || !supabaseConfigured,
 };

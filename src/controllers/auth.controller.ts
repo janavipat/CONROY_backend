@@ -3,7 +3,6 @@ import { supabaseAnon } from "../lib/supabase.js";
 import { ApiError } from "../middleware/errors.js";
 import { env } from "../config/env.js";
 import { supabaseAdmin } from "../lib/supabase.js";
-import { msg91SendOtp, msg91VerifyOtp } from "../lib/msg91.js";
 import { sendWelcomeEmail } from "../lib/email.js";
 import { authSchema, phoneStartSchema, phoneVerifySchema } from "../validators/schemas.js";
 
@@ -115,13 +114,13 @@ export async function startPhoneOtp(req: Request, res: Response) {
     });
   }
 
-  // Real mode: MSG91 generates and sends the OTP by SMS.
-  const mobile = e164.replace(/^\+/, "");
-  try {
-    await msg91SendOtp(mobile);
-  } catch (err) {
-    throw new ApiError(400, err instanceof Error ? err.message : "Could not send the OTP.");
-  }
+  // Real mode: Supabase phone auth sends the OTP via the configured provider
+  // (Twilio) and creates the user on first sign-in.
+  const { error } = await supabaseAnon.auth.signInWithOtp({
+    phone: e164,
+    options: { channel: "sms" },
+  });
+  if (error) throw new ApiError(400, error.message);
 
   res.json({ ok: true, mock: false, phone: e164, message: "A verification code has been sent by SMS." });
 }
@@ -142,11 +141,25 @@ export async function verifyPhoneOtp(req: Request, res: Response) {
     });
   }
 
-  // Real mode: MSG91 validates the OTP.
-  const mobile = e164.replace(/^\+/, "");
-  const valid = await msg91VerifyOtp(mobile, code);
-  if (!valid) throw new ApiError(401, "Incorrect or expired code.");
+  // Real mode: Supabase validates the OTP and returns a session.
+  const { data, error } = await supabaseAnon.auth.verifyOtp({
+    phone: e164,
+    token: code,
+    type: "sms",
+  });
+  if (error) throw new ApiError(401, error.message);
 
   await onSignedIn(e164, email || undefined);
-  res.json({ ok: true, mock: false, message: "Signed in.", data: phoneSession(e164) });
+  res.json({
+    ok: true,
+    mock: false,
+    message: "Signed in.",
+    data: {
+      user: { id: data.user?.id ?? e164, phone: data.user?.phone ?? e164 },
+      session: {
+        access_token: data.session?.access_token ?? crypto.randomUUID(),
+        token_type: "bearer",
+      },
+    },
+  });
 }
