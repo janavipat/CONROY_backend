@@ -2,7 +2,11 @@ import type { Request, Response } from "express";
 import { supabaseAdmin } from "../lib/supabase.js";
 import { ApiError } from "../middleware/errors.js";
 import { uploadProductImage } from "../lib/storage.js";
-import { adminProductSchema, updateReturnStatusSchema } from "../validators/schemas.js";
+import {
+  adminProductSchema,
+  updateReturnStatusSchema,
+  inventoryUpdateSchema,
+} from "../validators/schemas.js";
 
 function slugify(value: string): string {
   return value
@@ -29,6 +33,19 @@ async function setImages(
     );
     if (error) throw new ApiError(500, error.message);
   }
+}
+
+/**
+ * Best-effort write of the inventory fields (SKU + status). Ignored if the
+ * columns don't exist yet — so product CRUD keeps working before inventory.sql
+ * has been run.
+ */
+async function setInventoryFields(handle: string, sku: string, status: string): Promise<void> {
+  const { error } = await supabaseAdmin
+    .from("products")
+    .update({ sku: sku || null, status })
+    .eq("handle", handle);
+  if (error) console.warn("SKU/status not saved (run inventory.sql):", error.message);
 }
 
 /** POST /api/admin/upload — uploads an image to Supabase Storage, returns its URL. */
@@ -59,7 +76,7 @@ export async function createProduct(req: Request, res: Response) {
     currency: input.currency,
     sizes: input.sizes,
     details: input.details,
-    stock: 99,
+    stock: input.stock,
     rating: 5,
     review_count: 0,
     badge: input.badge ?? null,
@@ -70,6 +87,7 @@ export async function createProduct(req: Request, res: Response) {
   }
 
   await setImages(handle, input.images);
+  await setInventoryFields(handle, input.sku, input.status);
   res.status(201).json({ ok: true, message: "Product created.", data: { handle } });
 }
 
@@ -98,12 +116,14 @@ export async function updateProduct(req: Request, res: Response) {
       currency: input.currency,
       sizes: input.sizes,
       details: input.details,
+      stock: input.stock,
       badge: input.badge ?? null,
     })
     .eq("handle", handle);
   if (uErr) throw new ApiError(500, uErr.message);
 
   await setImages(existing.id as string, input.images);
+  await setInventoryFields(handle, input.sku, input.status);
   res.json({ ok: true, message: "Product updated.", data: { handle } });
 }
 
@@ -204,6 +224,58 @@ export async function listCustomers(_req: Request, res: Response) {
   }));
 
   res.json({ ok: true, count: customers.length, data: customers });
+}
+
+/* ─────────────────────────── Admin: inventory ───────────────────────────── */
+
+/** GET /api/admin/inventory — every product's stock / SKU / status. */
+export async function listInventory(_req: Request, res: Response) {
+  // select("*") so this still works before inventory.sql adds sku/status.
+  const { data, error } = await supabaseAdmin
+    .from("products")
+    .select("*")
+    .order("title");
+  if (error) throw new ApiError(500, error.message);
+
+  const items = (data ?? []).map((p) => ({
+    id: p.id,
+    handle: p.handle,
+    title: p.title,
+    sku: (p.sku as string) || "",
+    stock: (p.stock as number) ?? 0,
+    status: (p.status as string) || "active",
+    price: p.price,
+    currency: p.currency,
+  }));
+
+  res.json({ ok: true, count: items.length, data: items });
+}
+
+/** PATCH /api/admin/inventory/:handle — update stock / SKU / status. */
+export async function updateInventory(req: Request, res: Response) {
+  const { handle } = req.params;
+  const input = inventoryUpdateSchema.parse(req.body);
+
+  const patch: Record<string, unknown> = {};
+  if (input.stock !== undefined) patch.stock = input.stock;
+  if (input.sku !== undefined) patch.sku = input.sku || null;
+  if (input.status !== undefined) patch.status = input.status;
+  if (Object.keys(patch).length === 0) throw new ApiError(400, "Nothing to update.");
+
+  const { data, error } = await supabaseAdmin
+    .from("products")
+    .update(patch)
+    .eq("handle", handle)
+    .select("*")
+    .maybeSingle();
+  if (error) throw new ApiError(500, error.message);
+  if (!data) throw new ApiError(404, `Product not found: ${handle}`);
+
+  res.json({
+    ok: true,
+    message: "Inventory updated.",
+    data: { handle, stock: data.stock, sku: (data.sku as string) ?? "", status: (data.status as string) ?? "active" },
+  });
 }
 
 /* ─────────────────────────── Admin: dashboard ───────────────────────────── */

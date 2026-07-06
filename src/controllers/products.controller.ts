@@ -27,6 +27,8 @@ function mapProduct(row: Record<string, unknown>) {
     sizes: row.sizes ?? [],
     details: row.details ?? [],
     stock: row.stock,
+    sku: (row.sku as string) ?? "",
+    status: (row.status as string) ?? "active",
     rating: Number(row.rating),
     reviewCount: row.review_count,
     badge: row.badge ?? undefined,

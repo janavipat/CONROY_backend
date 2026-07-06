@@ -3,7 +3,15 @@ import multer from "multer";
 import { asyncHandler } from "../middleware/asyncHandler.js";
 import { requireAdmin } from "../middleware/adminAuth.js";
 import { getProduct, listProducts } from "../controllers/products.controller.js";
-import { getCollection, listCollections } from "../controllers/collections.controller.js";
+import {
+  getCollection,
+  listCollections,
+  listAdminCollections,
+  createCollection,
+  updateCollection,
+  deleteCollection,
+  setCollectionProducts,
+} from "../controllers/collections.controller.js";
 import { submitContact, subscribeNewsletter } from "../controllers/engagement.controller.js";
 import { trackVisit, getLiveVisitors } from "../controllers/analytics.controller.js";
 import { createOrder, getOrder, listOrdersByPhone } from "../controllers/orders.controller.js";
@@ -33,6 +41,8 @@ import {
   getAdminOrder,
   listAllReturns,
   listCustomers,
+  listInventory,
+  updateInventory,
   updateProduct,
   updateReturnStatus,
   uploadImage,
@@ -104,6 +114,15 @@ router.post("/admin/upload", upload.single("file"), asyncHandler(uploadImage));
 router.post("/admin/products", asyncHandler(createProduct));
 router.put("/admin/products/:handle", asyncHandler(updateProduct));
 router.delete("/admin/products/:handle", asyncHandler(deleteProduct));
+// Inventory
+router.get("/admin/inventory", asyncHandler(listInventory));
+router.patch("/admin/inventory/:handle", asyncHandler(updateInventory));
+// Collections
+router.get("/admin/collections", asyncHandler(listAdminCollections));
+router.post("/admin/collections", asyncHandler(createCollection));
+router.put("/admin/collections/:handle", asyncHandler(updateCollection));
+router.delete("/admin/collections/:handle", asyncHandler(deleteCollection));
+router.put("/admin/collections/:handle/products", asyncHandler(setCollectionProducts));
 router.get("/admin/stats", asyncHandler(getStats));
 router.get("/admin/live", asyncHandler(getLiveVisitors));
 router.get("/admin/orders", asyncHandler(listAllOrders));

@@ -132,6 +132,9 @@ export const adminProductSchema = z.object({
   fit: z.string().min(1, "Type is required").max(60),
   price: z.coerce.number().int().nonnegative("Price must be 0 or more"),
   currency: z.string().max(8).default("INR"),
+  stock: z.coerce.number().int().nonnegative().default(0),
+  sku: z.string().max(80).optional().default(""),
+  status: z.enum(["active", "draft", "archived"]).default("active"),
   sizes: z.array(z.string().max(12)).default([]),
   details: z.array(z.string().max(300)).default([]),
   badge: z.string().max(40).nullable().optional(),
@@ -140,6 +143,28 @@ export const adminProductSchema = z.object({
     .default([]),
 });
 export type AdminProductInput = z.infer<typeof adminProductSchema>;
+
+// Admin: create / update a collection.
+export const adminCollectionSchema = z.object({
+  title: z.string().min(1, "Title is required").max(160),
+  handle: z.string().max(160).optional(),
+  subtitle: z.string().max(300).optional().default(""),
+  description: z.string().max(4000).optional().default(""),
+  image: z.string().url().optional().or(z.literal("")).default(""),
+});
+export type AdminCollectionInput = z.infer<typeof adminCollectionSchema>;
+
+// Admin: set the products belonging to a collection (ordered handles).
+export const collectionProductsSchema = z.object({
+  productHandles: z.array(z.string().min(1)).default([]),
+});
+
+// Admin: update inventory fields for a product.
+export const inventoryUpdateSchema = z.object({
+  stock: z.coerce.number().int().nonnegative().optional(),
+  sku: z.string().max(80).optional().nullable(),
+  status: z.enum(["active", "draft", "archived"]).optional(),
+});
 
 export const authSchema = z.object({
   email: z.string().email("A valid email is required"),
