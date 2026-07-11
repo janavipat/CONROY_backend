@@ -22,6 +22,39 @@ export async function submitContact(req: Request, res: Response) {
   });
 }
 
+/** GET /api/admin/contacts — list contact-form enquiries (newest first). */
+export async function listContacts(_req: Request, res: Response) {
+  const { data, error } = await supabaseAdmin
+    .from("contacts")
+    .select("*")
+    .order("created_at", { ascending: false })
+    .limit(500);
+  if (error) throw new ApiError(500, error.message);
+  res.json({ ok: true, data: data ?? [] });
+}
+
+/** PATCH /api/admin/contacts/:id — mark an enquiry handled / reopened. */
+export async function setContactHandled(req: Request, res: Response) {
+  const handled = Boolean(req.body?.handled);
+  const { error } = await supabaseAdmin
+    .from("contacts")
+    .update({ handled })
+    .eq("id", req.params.id);
+  if (error) {
+    // The `handled` column ships in the latest migration; guide the operator.
+    console.warn("contacts.handled update failed:", error.message);
+    throw new ApiError(500, "Run the latest DB migration to enable this (adds contacts.handled).");
+  }
+  res.json({ ok: true, message: handled ? "Marked as handled." : "Reopened." });
+}
+
+/** DELETE /api/admin/contacts/:id — remove an enquiry. */
+export async function deleteContact(req: Request, res: Response) {
+  const { error } = await supabaseAdmin.from("contacts").delete().eq("id", req.params.id);
+  if (error) throw new ApiError(500, error.message);
+  res.json({ ok: true, message: "Enquiry deleted." });
+}
+
 /** POST /api/newsletter */
 export async function subscribeNewsletter(req: Request, res: Response) {
   const { email } = newsletterSchema.parse(req.body);

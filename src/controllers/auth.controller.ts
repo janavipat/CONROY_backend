@@ -139,7 +139,7 @@ export async function startPhoneOtp(req: Request, res: Response) {
     const code = generateOtp();
     // Send first — only store the code once Twilio has accepted the SMS, so a
     // failed send never leaves a code the user can't receive.
-    await sendSms(e164, `${code} is your CONROY verification code. It expires in 10 minutes.`);
+    await sendSms(e164, `${code} is your CONROY verification code. It expires in 1 minute.`);
     saveOtp(e164, code);
     return res.json({
       ok: true,

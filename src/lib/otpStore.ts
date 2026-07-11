@@ -13,7 +13,7 @@ interface Entry {
 }
 
 const store = new Map<string, Entry>();
-const TTL_MS = 10 * 60 * 1000; // 10 minutes
+const TTL_MS = 1 * 60 * 1000; // 1 minute
 const MAX_ATTEMPTS = 5;
 
 /** Cryptographically-random 6-digit code (100000–999999). */

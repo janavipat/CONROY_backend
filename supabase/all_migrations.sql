@@ -69,8 +69,11 @@ create table if not exists public.contacts (
   phone      text,
   subject    text not null,
   message    text not null,
+  handled    boolean not null default false,
   created_at timestamptz not null default now()
 );
+-- Backfill for stores created before the admin inbox shipped.
+alter table public.contacts add column if not exists handled boolean not null default false;
 
 create table if not exists public.newsletter_subscribers (
   id         uuid primary key default gen_random_uuid(),

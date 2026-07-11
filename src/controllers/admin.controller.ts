@@ -404,3 +404,11 @@ export async function updateReturnStatus(req: Request, res: Response) {
 
   res.json({ ok: true, message: "Return status updated.", data });
 }
+
+/** DELETE /api/admin/returns/:id — removes a return request (items cascade). */
+export async function deleteReturn(req: Request, res: Response) {
+  const { id } = req.params;
+  const { error } = await supabaseAdmin.from("returns").delete().eq("id", id);
+  if (error) throw new ApiError(500, error.message);
+  res.json({ ok: true, message: "Return request deleted." });
+}
