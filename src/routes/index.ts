@@ -2,6 +2,9 @@ import { Router } from "express";
 import multer from "multer";
 import { asyncHandler } from "../middleware/asyncHandler.js";
 import { requireAdmin } from "../middleware/adminAuth.js";
+import { getSettings, updateSettings } from "../controllers/settings.controller.js";
+import { submitChat, listChat, setChatStatus, deleteChat } from "../controllers/chat.controller.js";
+import { listAddresses, saveAddresses } from "../controllers/address.controller.js";
 import { getProduct, listProducts } from "../controllers/products.controller.js";
 import {
   getCollection,
@@ -25,6 +28,7 @@ import {
   recordPageView,
   recordCartAdd,
   getAnalytics,
+  getAbandonedCustomers,
 } from "../controllers/analytics.controller.js";
 import { toggleLike, listLikes } from "../controllers/wishlist.controller.js";
 import { whatsappHealth, whatsappTest } from "../controllers/whatsappHealth.controller.js";
@@ -93,6 +97,16 @@ router.get("/collections/:handle", asyncHandler(getCollection));
 router.post("/contact", asyncHandler(submitContact));
 router.post("/newsletter", asyncHandler(subscribeNewsletter));
 
+// Public store settings (homepage section visibility, payment methods, …)
+router.get("/settings", asyncHandler(getSettings));
+
+// Storefront chat widget
+router.post("/chat", asyncHandler(submitChat));
+
+// Saved delivery addresses (per customer, keyed by phone)
+router.get("/addresses", asyncHandler(listAddresses));
+router.put("/addresses", asyncHandler(saveAddresses));
+
 // Analytics — public heartbeat from storefront visitors (live-visitor tracking)
 router.post("/track", asyncHandler(trackVisit));
 router.post("/analytics/pageview", asyncHandler(recordPageView));
@@ -133,6 +147,10 @@ router.post("/auth/phone/verify", asyncHandler(verifyPhoneOtp));
 router.use("/admin", requireAdmin);
 // Lightweight endpoint the frontend uses to validate the entered key.
 router.get("/admin/verify", (_req, res) => res.json({ ok: true }));
+router.put("/admin/settings", asyncHandler(updateSettings));
+router.get("/admin/chat", asyncHandler(listChat));
+router.patch("/admin/chat/:id", asyncHandler(setChatStatus));
+router.delete("/admin/chat/:id", asyncHandler(deleteChat));
 router.post("/admin/upload", upload.single("file"), asyncHandler(uploadImage));
 router.post("/admin/products", asyncHandler(createProduct));
 router.put("/admin/products/:handle", asyncHandler(updateProduct));
@@ -149,6 +167,7 @@ router.put("/admin/collections/:handle/products", asyncHandler(setCollectionProd
 router.get("/admin/stats", asyncHandler(getStats));
 router.get("/admin/live", asyncHandler(getLiveVisitors));
 router.get("/admin/analytics", asyncHandler(getAnalytics));
+router.get("/admin/abandoned", asyncHandler(getAbandonedCustomers));
 router.get("/admin/whatsapp/health", asyncHandler(whatsappHealth));
 router.post("/admin/whatsapp/test", asyncHandler(whatsappTest));
 router.get("/admin/orders", asyncHandler(listAllOrders));

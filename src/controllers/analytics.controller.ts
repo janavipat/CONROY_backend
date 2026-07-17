@@ -2,6 +2,7 @@ import type { Request, Response } from "express";
 import { z } from "zod";
 import { recordPing, snapshot } from "../lib/liveVisitors.js";
 import { supabaseAdmin } from "../lib/supabase.js";
+import { recordCartEvent, readCartEvents } from "../lib/cartEvents.js";
 
 const pingSchema = z.object({
   sessionId: z.string().min(1).max(120),
@@ -33,6 +34,8 @@ const pageViewSchema = z.object({
 const cartAddSchema = z.object({
   sessionId: z.string().min(1).max(120),
   productHandle: z.string().min(1).max(160),
+  phone: z.string().max(40).optional(),
+  email: z.string().max(160).optional(),
 });
 
 /** POST /api/analytics/pageview — records a page view + time-on-page. */
@@ -48,11 +51,98 @@ export async function recordPageView(req: Request, res: Response) {
 /** POST /api/analytics/cart-add — records an add-to-cart for a product. */
 export async function recordCartAdd(req: Request, res: Response) {
   const input = cartAddSchema.parse(req.body);
+  const base = { session_id: input.sessionId, product_handle: input.productHandle };
   await supabaseAdmin
     .from("cart_adds")
-    .insert({ session_id: input.sessionId, product_handle: input.productHandle })
+    .insert(base)
     .then(({ error }) => error && console.warn("cart_add not stored (run analytics.sql):", error.message));
+
+  // Attribute to a signed-in customer in Storage (no migration needed) so the
+  // admin can see customer-wise abandoned carts. Fire-and-forget.
+  if (input.phone) {
+    void recordCartEvent({
+      phone: input.phone,
+      email: input.email || "",
+      handle: input.productHandle,
+      at: new Date().toISOString(),
+    });
+  }
   res.json({ ok: true });
+}
+
+/**
+ * GET /api/admin/abandoned — customer-wise abandoned carts: signed-in shoppers
+ * who added a product to their cart but never purchased it. Cart adds made
+ * while logged out (no phone) can't be attributed, so they're excluded.
+ */
+export async function getAbandonedCustomers(_req: Request, res: Response) {
+  const { data: products } = await supabaseAdmin.from("products").select("handle, title");
+  const titleOf = new Map((products ?? []).map((p) => [p.handle as string, p.title as string]));
+
+  // Attributed add-to-cart events (Storage-backed, no migration needed).
+  const adds = await readCartEvents();
+
+  const { data: orders } = await supabaseAdmin
+    .from("orders")
+    .select("phone, email, full_name, items:order_items(product_handle)");
+
+  // What each customer (by phone) has actually purchased.
+  const purchased = new Map<string, Set<string>>();
+  const nameByPhone = new Map<string, string>();
+  const emailByPhone = new Map<string, string>();
+  for (const o of orders ?? []) {
+    const phone = (o.phone as string) || "";
+    if (!phone) continue;
+    if (!purchased.has(phone)) purchased.set(phone, new Set());
+    const set = purchased.get(phone)!;
+    for (const it of (o.items as { product_handle: string }[]) ?? []) set.add(it.product_handle);
+    if (o.full_name && !nameByPhone.has(phone)) nameByPhone.set(phone, o.full_name as string);
+    if (o.email && !emailByPhone.has(phone)) emailByPhone.set(phone, o.email as string);
+  }
+
+  // Group attributed cart events by customer, keeping products they never bought.
+  interface Group {
+    phone: string;
+    email: string;
+    name: string | null;
+    handles: Set<string>;
+    lastAddedAt: string;
+  }
+  const groups = new Map<string, Group>();
+  for (const a of adds) {
+    const phone = a.phone || "";
+    if (!phone) continue;
+    const handle = a.handle;
+    if (purchased.get(phone)?.has(handle)) continue; // they bought this one
+    const created = a.at || "";
+    const g =
+      groups.get(phone) ??
+      ({
+        phone,
+        email: a.email || emailByPhone.get(phone) || "",
+        name: nameByPhone.get(phone) ?? null,
+        handles: new Set<string>(),
+        lastAddedAt: created,
+      } as Group);
+    g.handles.add(handle);
+    if (created > g.lastAddedAt) g.lastAddedAt = created;
+    groups.set(phone, g);
+  }
+
+  const customers = [...groups.values()]
+    .filter((g) => g.handles.size > 0)
+    .map((g) => ({
+      phone: g.phone,
+      email: g.email,
+      name: g.name,
+      products: [...g.handles].map((h) => ({ handle: h, title: titleOf.get(h) ?? h })),
+      productCount: g.handles.size,
+      hasOrders: purchased.has(g.phone),
+      lastAddedAt: g.lastAddedAt,
+    }))
+    .sort((a, b) => b.lastAddedAt.localeCompare(a.lastAddedAt));
+
+  res.json({ ok: true, data: customers });
 }
 
 /* ────────────────────────── Admin analytics ─────────────────────────────── */
@@ -295,7 +385,6 @@ export async function getAnalytics(_req: Request, res: Response) {
       ...c,
       netPurchase: c.grossValue - c.returnedAmount,
       avgOrder: c.orders ? Math.round(c.grossValue / c.orders) : 0,
-      status: c.orders >= 3 ? "VIP" : c.orders === 1 ? "New" : "Active",
     }))
     .sort((a, b) => b.grossValue - a.grossValue)
     .slice(0, 200);

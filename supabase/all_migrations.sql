@@ -80,6 +80,9 @@ create table if not exists public.newsletter_subscribers (
   email      text not null unique,
   created_at timestamptz not null default now()
 );
+-- Note: store-wide settings (homepage section toggles, payment methods,
+-- maintenance mode, contact number) are stored as a JSON object in Supabase
+-- Storage (bucket "app-config") — no table needed.
 
 -- ─────────────────────────────── Orders ────────────────────────────────────
 
@@ -360,9 +363,15 @@ create table if not exists public.cart_adds (
   id             uuid primary key default gen_random_uuid(),
   session_id     text not null,
   product_handle text not null,
+  phone          text,
+  email          text,
   created_at     timestamptz not null default now()
 );
 create index if not exists cart_adds_product_idx on public.cart_adds (product_handle);
+-- Attribute add-to-cart to a signed-in customer (for customer-wise abandoned carts).
+alter table public.cart_adds add column if not exists phone text;
+alter table public.cart_adds add column if not exists email text;
+create index if not exists cart_adds_phone_idx on public.cart_adds (phone);
 
 create table if not exists public.product_likes (
   id             uuid primary key default gen_random_uuid(),
