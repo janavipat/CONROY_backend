@@ -10,6 +10,14 @@ import { errorHandler, notFound } from "./middleware/errors.js";
 export function createApp() {
   const app = express();
 
+  // Trust the first proxy hop. Required whenever this runs behind a reverse
+  // proxy (Vercel's edge network, Railway, nginx, …) — those always add an
+  // X-Forwarded-For header, and without this express-rate-limit throws
+  // ERR_ERL_UNEXPECTED_X_FORWARDED_FOR on every request (asynchronously,
+  // which crashes the whole process on a platform like Vercel instead of
+  // producing a normal HTTP error).
+  app.set("trust proxy", 1);
+
   app.use(helmet());
   app.use(express.json({ limit: "1mb" }));
 
