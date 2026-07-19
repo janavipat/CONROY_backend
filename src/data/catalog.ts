@@ -55,7 +55,7 @@ export const PRODUCTS: SeedProduct[] = [
     stock: 99,
     rating: 5,
     review_count: 1,
-    badge: "Limited time",
+    badge: null,
     images: [
       { src: `${CDN}/3_3_jpg.jpg?v=1771951023`, alt: "Black Straight Fit denim — front" },
       { src: `${CDN}/3_1_jpg.jpg?v=1771951023`, alt: "Black Straight Fit denim — detail" },
@@ -86,7 +86,7 @@ export const PRODUCTS: SeedProduct[] = [
     stock: 99,
     rating: 5,
     review_count: 1,
-    badge: "Limited time",
+    badge: null,
     images: [
       { src: `${CDN}/4_1_jpg.jpg?v=1771951309`, alt: "Blue Straight Fit denim — front" },
       { src: `${CDN}/4_2_jpg.jpg?v=1771951311`, alt: "Blue Straight Fit denim — detail" },
@@ -118,7 +118,7 @@ export const PRODUCTS: SeedProduct[] = [
     stock: 99,
     rating: 5,
     review_count: 1,
-    badge: "Limited time",
+    badge: null,
     images: [
       { src: `${CDN}/1.1.jpg_2_f47254ce-4b73-4cfe-87d8-4fbf77e25ccd.jpg?v=1773538477`, alt: "Black Relax Fit denim — front" },
       { src: `${CDN}/1_2_jpg_6ea5d82a-e26e-49ce-93e6-5b86d8a876c3.jpg?v=1773384301`, alt: "Black Relax Fit denim — detail" },
@@ -149,7 +149,7 @@ export const PRODUCTS: SeedProduct[] = [
     stock: 99,
     rating: 5,
     review_count: 1,
-    badge: "Limited time",
+    badge: null,
     images: [
       { src: `${CDN}/2_7_jpg.jpg?v=1771950828`, alt: "Blue Relax Fit denim — front" },
       { src: `${CDN}/2_1_jpg.jpg?v=1771950829`, alt: "Blue Relax Fit denim — detail" },
