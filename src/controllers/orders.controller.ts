@@ -109,7 +109,13 @@ export async function cancelOrder(req: Request, res: Response) {
     .eq("id", id)
     .select("*, items:order_items(*)")
     .single();
-  if (uErr) throw new ApiError(500, uErr.message);
+  if (uErr) {
+    // Never leak Postgres/PostgREST internals to a shopper — log the real
+    // cause (e.g. "column ... does not exist" when cancel-order.sql hasn't
+    // been run yet) and return the customer-facing message.
+    console.error("Order cancellation failed:", uErr.message);
+    throw new ApiError(500, "Unable to cancel your order. Please try again.");
+  }
 
   await restoreInventory((order.items as OrderItemRow[]) ?? []);
 
