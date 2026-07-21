@@ -19,6 +19,22 @@ const pingSchema = z.object({
  */
 const MAX_VIEW_MS = 30 * 60 * 1000;
 
+/** Admin-facing label for a raw order status (charts shouldn't show DB codes). */
+function orderStatusLabel(status: string): string {
+  switch (status) {
+    case "paid":
+      return "Paid";
+    case "cod_pending":
+      return "Cash on delivery";
+    case "cancelled":
+      return "Cancelled";
+    case "pending":
+      return "Pending";
+    default:
+      return status;
+  }
+}
+
 export async function trackVisit(req: Request, res: Response) {
   const ping = pingSchema.parse(req.body);
   recordPing(ping);
@@ -322,7 +338,7 @@ export async function getAnalytics(_req: Request, res: Response) {
   for (const o of orders ?? []) {
     const net = netOf(o);
     totalRevenue += net;
-    const st = o.status as string;
+    const st = orderStatusLabel(o.status as string);
     statusCount[st] = (statusCount[st] ?? 0) + 1;
     const day = new Date(o.created_at as string).toISOString().slice(0, 10);
     if (revByDay.has(day)) {
