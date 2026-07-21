@@ -12,6 +12,13 @@ const pingSchema = z.object({
 });
 
 /** POST /api/track — public heartbeat from storefront visitors. */
+/**
+ * Longest slice of time a single page view may contribute to engagement
+ * metrics. A tab left open overnight was reporting 21 hours on one view, which
+ * inflated total/average session time far beyond reality.
+ */
+const MAX_VIEW_MS = 30 * 60 * 1000;
+
 export async function trackVisit(req: Request, res: Response) {
   const ping = pingSchema.parse(req.body);
   recordPing(ping);
@@ -235,7 +242,8 @@ export async function getAnalytics(_req: Request, res: Response) {
   for (const v of views ?? []) {
     const path = v.path as string;
     const sid = v.session_id as string;
-    const dur = (v.duration_ms as number) ?? 0;
+    // Clamp idle tabs so they don't masquerade as engagement.
+    const dur = Math.min((v.duration_ms as number) ?? 0, MAX_VIEW_MS);
     totalTimeMs += dur;
     const p = pageAgg.get(path) ?? { views: 0, totalMs: 0, sessions: new Set<string>(), lastVisit: "" };
     p.views += 1;
