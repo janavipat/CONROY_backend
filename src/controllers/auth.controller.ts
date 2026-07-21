@@ -10,11 +10,29 @@ import { generateOtp, saveOtp, checkOtp } from "../lib/otpStore.js";
 import { authSchema, phoneStartSchema, phoneVerifySchema } from "../validators/schemas.js";
 
 /** Builds a lightweight session for a verified phone number. */
-function phoneSession(e164: string) {
+function phoneSession(e164: string, name?: string | null) {
   return {
-    user: { id: e164, phone: e164 },
+    user: { id: e164, phone: e164, name: name || null },
     session: { access_token: crypto.randomUUID(), token_type: "bearer" },
   };
+}
+
+/**
+ * The customer's stored display name, if we have one. Read back from `users`
+ * rather than trusting the request body, so it works for sign-in as well as
+ * sign-up. Best-effort: a missing column must never block authentication.
+ */
+async function storedName(e164: string): Promise<string | null> {
+  try {
+    const { data } = await supabaseAdmin
+      .from("users")
+      .select("full_name")
+      .eq("phone", e164)
+      .maybeSingle();
+    return ((data?.full_name as string) || "").trim() || null;
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -231,7 +249,7 @@ export async function verifyPhoneOtp(req: Request, res: Response) {
       ok: true,
       mock: true,
       message: `${successMsg} (mock mode).`,
-      data: phoneSession(e164),
+      data: phoneSession(e164, await storedName(e164)),
     });
   }
 
@@ -245,7 +263,7 @@ export async function verifyPhoneOtp(req: Request, res: Response) {
       ok: true,
       mock: false,
       message: successMsg,
-      data: phoneSession(e164),
+      data: phoneSession(e164, await storedName(e164)),
     });
   }
 
@@ -263,7 +281,11 @@ export async function verifyPhoneOtp(req: Request, res: Response) {
     mock: false,
     message: successMsg,
     data: {
-      user: { id: data.user?.id ?? e164, phone: data.user?.phone ?? e164 },
+      user: {
+        id: data.user?.id ?? e164,
+        phone: data.user?.phone ?? e164,
+        name: await storedName(e164),
+      },
       session: {
         access_token: data.session?.access_token ?? crypto.randomUUID(),
         token_type: "bearer",
