@@ -7,7 +7,7 @@ import { sendWelcomeEmail } from "../lib/email.js";
 import { twilioConfigured, sendSms } from "../lib/twilio.js";
 import { whatsappConfigured, sendWhatsappOtp } from "../lib/whatsapp.js";
 import { generateOtp, saveOtp, checkOtp } from "../lib/otpStore.js";
-import { authSchema, phoneStartSchema, phoneVerifySchema } from "../validators/schemas.js";
+import { authSchema, phoneStartSchema, phoneVerifySchema, updateNameSchema } from "../validators/schemas.js";
 
 /** Builds a lightweight session for a verified phone number. */
 function phoneSession(e164: string, name?: string | null) {
@@ -292,4 +292,22 @@ export async function verifyPhoneOtp(req: Request, res: Response) {
       },
     },
   });
+}
+
+/**
+ * PATCH /api/auth/profile — updates the signed-in customer's display name.
+ * Identity is the phone number, matching the rest of the phone-OTP session
+ * model (no separate bearer-token verification, same as /orders?phone=).
+ */
+export async function updateProfileName(req: Request, res: Response) {
+  const { phone, name } = updateNameSchema.parse(req.body);
+  const e164 = toE164(phone);
+
+  const { error } = await supabaseAdmin
+    .from("users")
+    .update({ full_name: name })
+    .eq("phone", e164);
+  if (error) throw new ApiError(500, "Could not save your name. Please try again.");
+
+  res.json({ ok: true, message: "Name updated.", data: { name } });
 }

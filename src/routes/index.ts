@@ -55,6 +55,7 @@ import {
   register,
   startPhoneOtp,
   verifyPhoneOtp,
+  updateProfileName,
 } from "../controllers/auth.controller.js";
 import {
   createProduct,
@@ -149,6 +150,7 @@ router.get("/auth/me", asyncHandler(me));
 // Phone OTP login
 router.post("/auth/phone/start", asyncHandler(startPhoneOtp));
 router.post("/auth/phone/verify", asyncHandler(verifyPhoneOtp));
+router.patch("/auth/profile", asyncHandler(updateProfileName));
 
 // Admin — everything under /admin requires the admin key (x-admin-key header).
 router.use("/admin", requireAdmin);

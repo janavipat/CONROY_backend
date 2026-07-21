@@ -192,6 +192,12 @@ export const phoneVerifySchema = z.object({
   email: z.string().email().optional().or(z.literal("")),
 });
 
+// Update the signed-in customer's display name.
+export const updateNameSchema = z.object({
+  phone: z.string().trim().min(8),
+  name: z.string().trim().min(1, "Please enter your name").max(120),
+});
+
 export type ContactInput = z.infer<typeof contactSchema>;
 export type NewsletterInput = z.infer<typeof newsletterSchema>;
 export type CreateOrderInput = z.infer<typeof createOrderSchema>;
