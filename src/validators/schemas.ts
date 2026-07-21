@@ -195,4 +195,38 @@ export const phoneVerifySchema = z.object({
 export type ContactInput = z.infer<typeof contactSchema>;
 export type NewsletterInput = z.infer<typeof newsletterSchema>;
 export type CreateOrderInput = z.infer<typeof createOrderSchema>;
+
+/** Delivery lifecycle states an order moves through. */
+export const FULFILLMENT_STATUSES = [
+  "Pending",
+  "Confirmed",
+  "Processing",
+  "Packed",
+  "Shipped",
+  "Out For Delivery",
+  "Delivered",
+  "Cancelled",
+] as const;
+
+/** Only these early states may still be cancelled by the customer. */
+export const CANCELLABLE_STATUSES = ["Pending", "Confirmed", "Processing"] as const;
+
+export const REFUND_STATUSES = [
+  "None",
+  "Initiated",
+  "Processing",
+  "Completed",
+  "Failed",
+] as const;
+
+/**
+ * Customer-initiated cancellation. `phone` identifies the requester — the same
+ * ownership model the order-history endpoint already uses.
+ */
+export const cancelOrderSchema = z.object({
+  reason: z.string().min(1, "A cancellation reason is required").max(160),
+  customReason: z.string().max(500).optional().or(z.literal("")),
+  phone: z.string().min(6, "A phone number is required").max(20),
+});
+
 export type AuthInput = z.infer<typeof authSchema>;

@@ -98,6 +98,18 @@ create table if not exists public.orders (
   created_at    timestamptz not null default now()
 );
 
+-- Delivery lifecycle + cancellation. Kept separate from `status`, which stores
+-- the payment state ('paid' / 'cod_pending' / 'cancelled') used by reporting.
+alter table public.orders
+  add column if not exists fulfillment_status text not null default 'Pending',
+  add column if not exists cancel_reason      text,
+  add column if not exists cancelled_at       timestamptz,
+  add column if not exists cancelled_by       text,
+  add column if not exists refund_status      text not null default 'None';
+
+create index if not exists orders_fulfillment_status_idx
+  on public.orders (fulfillment_status);
+
 create table if not exists public.order_items (
   id             uuid primary key default gen_random_uuid(),
   order_id       uuid not null references public.orders(id) on delete cascade,

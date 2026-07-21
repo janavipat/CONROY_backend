@@ -32,7 +32,12 @@ import {
 } from "../controllers/analytics.controller.js";
 import { toggleLike, listLikes } from "../controllers/wishlist.controller.js";
 import { whatsappHealth, whatsappTest } from "../controllers/whatsappHealth.controller.js";
-import { createOrder, getOrder, listOrdersByPhone } from "../controllers/orders.controller.js";
+import {
+  cancelOrder,
+  createOrder,
+  getOrder,
+  listOrdersByPhone,
+} from "../controllers/orders.controller.js";
 import { createPaymentOrder, verifyPayment } from "../controllers/payments.controller.js";
 import { createReturn, listReturnsByPhone } from "../controllers/returns.controller.js";
 import {
@@ -120,6 +125,8 @@ router.get("/wishlist", asyncHandler(listLikes));
 router.post("/orders", asyncHandler(createOrder));
 router.get("/orders", asyncHandler(listOrdersByPhone));
 router.get("/orders/:id", asyncHandler(getOrder));
+// Customer-initiated cancellation of an eligible order.
+router.patch("/orders/:id/cancel", asyncHandler(cancelOrder));
 
 // Payments (Razorpay online checkout: create order → verify signature → place)
 router.post("/payments/razorpay/order", asyncHandler(createPaymentOrder));
