@@ -56,6 +56,15 @@ const EnvSchema = z.object({
   SMTP_PASS: z.string().default(""),
   SMTP_FROM: z.string().default(""),
 
+  // Firebase (send email via the "Trigger Email" Firestore extension, instead
+  // of SMTP directly). All three come from a service account key — Firebase
+  // console → Project settings → Service accounts → Generate new private key.
+  FIREBASE_PROJECT_ID: z.string().default(""),
+  FIREBASE_CLIENT_EMAIL: z.string().default(""),
+  FIREBASE_PRIVATE_KEY: z.string().default(""),
+  // Firestore collection the Trigger Email extension watches (its default is "mail").
+  FIREBASE_MAIL_COLLECTION: z.string().default("mail"),
+
   // Admin panel key. Required as `x-admin-key` on /api/admin/* when set.
   ADMIN_KEY: z.string().default(""),
 });

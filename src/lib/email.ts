@@ -1,5 +1,6 @@
 import nodemailer from "nodemailer";
 import { env } from "../config/env.js";
+import { firebaseConfigured, queueFirebaseMail } from "./firebase.js";
 
 /**
  * Transactional email via SMTP (Nodemailer). Works with any SMTP provider —
@@ -32,6 +33,13 @@ interface SendArgs {
 }
 
 async function sendEmail({ to, subject, html, text }: SendArgs): Promise<void> {
+  // Firebase (Trigger Email extension) takes priority when configured — the
+  // extension does the actual SMTP send, this just queues the document.
+  if (firebaseConfigured) {
+    await queueFirebaseMail({ to, subject, html, text });
+    return;
+  }
+
   const t = getTransporter();
   if (!t) {
     console.log(`📧 [mock email] To: ${to}\n   Subject: ${subject}\n   ${text}\n`);
