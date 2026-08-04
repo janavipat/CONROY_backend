@@ -37,15 +37,28 @@ async function storedName(e164: string): Promise<string | null> {
   }
 }
 
+// Unused now that sign-in is by email (the email lookup in startPhoneOtp /
+// verifyPhoneOtp already resolves the account, so there's nothing left to
+// look up by phone). Kept for when phone-based sign-in is restored.
+// async function storedEmail(e164: string): Promise<string | null> {
+//   try {
+//     const { data } = await supabaseAdmin.from("users").select("email").eq("phone", e164).maybeSingle();
+//     return ((data?.email as string) || "").trim() || null;
+//   } catch {
+//     return null;
+//   }
+// }
+
 /**
- * The customer's stored email, if we have one — used to deliver OTPs by email
- * on sign-in without asking the shopper to type it in again. Best-effort: a
- * lookup failure must never block authentication.
+ * Looks up the phone number (the account's identity) for a given email —
+ * sign-in is by email now, so we need to resolve back to the phone key.
+ * Returns null on no match or a lookup failure (both non-fatal to the
+ * caller, which reports "no account found" either way).
  */
-async function storedEmail(e164: string): Promise<string | null> {
+async function findPhoneByEmail(email: string): Promise<string | null> {
   try {
-    const { data } = await supabaseAdmin.from("users").select("email").eq("phone", e164).maybeSingle();
-    return ((data?.email as string) || "").trim() || null;
+    const { data } = await supabaseAdmin.from("users").select("phone").eq("email", email).maybeSingle();
+    return (data?.phone as string) || null;
   } catch {
     return null;
   }
@@ -174,20 +187,32 @@ export async function me(req: Request, res: Response) {
 
 /* ───────────────────────── Phone OTP login ──────────────────────────────── */
 
-/** POST /api/auth/phone/start — sends an OTP to the phone (SMS). */
+/** POST /api/auth/phone/start — sends an OTP (by email for sign-in; see below). */
 export async function startPhoneOtp(req: Request, res: Response) {
   const { phone, mode, email } = phoneStartSchema.parse(req.body);
-  const e164 = toE164(phone);
 
-  // Gate before spending an OTP: signup needs a new number, signin an existing
-  // one. Fail open only if the lookup itself errors (never lock users out).
+  let e164: string;
+  if (mode === "signin") {
+    // Sign-in is by EMAIL for now (phone-based sign-in is commented out below
+    // — re-enable by restoring `e164 = toE164(phone as string)` here and the
+    // existence gate that used to run for signin, and dropping this lookup).
+    // e164 = toE164(phone as string);
+    const found = await findPhoneByEmail(email as string);
+    if (!found) {
+      throw new ApiError(404, "No account found for this email. Please create an account first.");
+    }
+    e164 = found;
+  } else {
+    e164 = toE164(phone as string);
+  }
+
+  // Gate before spending an OTP: signup needs a brand-new number. (Sign-in
+  // existence is already guaranteed by the email lookup above.) Fail open
+  // only if the lookup itself errors (never lock users out).
   const { exists, error: lookupError } = await accountExists(e164);
   if (!lookupError) {
     if (mode === "signup" && exists) {
       throw new ApiError(409, "This number is already registered. Please sign in instead.");
-    }
-    if (mode === "signin" && !exists) {
-      throw new ApiError(404, "No account found for this number. Please create an account first.");
     }
   }
 
@@ -218,12 +243,13 @@ export async function startPhoneOtp(req: Request, res: Response) {
   // }
 
   // Email OTP (active channel): signup uses the email just entered; signin
-  // looks up the email already on file for this number. Attempted whenever an
-  // address is available — not gated on emailConfigured, since sendOtpEmail
-  // falls back to a console-logged mock itself when SMTP isn't set yet (same
-  // as the welcome email), so this works in dev before SMTP is configured.
+  // uses the email the shopper signed in with (already resolved to an
+  // account above). Attempted whenever an address is available — not gated
+  // on emailConfigured, since sendOtpEmail falls back to a console-logged
+  // mock itself when SMTP isn't set yet (same as the welcome email), so this
+  // works in dev before SMTP is configured.
   {
-    const emailTo = mode === "signup" ? email || undefined : (await storedEmail(e164)) || undefined;
+    const emailTo = email || undefined;
     if (mode === "signup" && !emailTo) {
       throw new ApiError(400, "Please enter your email to receive a verification code.");
     }
@@ -240,7 +266,9 @@ export async function startPhoneOtp(req: Request, res: Response) {
         message: `A verification code has been sent to ${maskEmail(emailTo)}.`,
       });
     }
-    // signin with no email on file — fall through to Twilio/Supabase below.
+    // Unreachable in practice — signup already threw above if it had no
+    // email, and signin always has one (required by phoneStartSchema).
+    // Falls through to the phone-based paths below only if that ever changes.
   }
 
   // Twilio-direct: we generate the OTP and send it via Twilio ourselves, using
@@ -272,9 +300,25 @@ export async function startPhoneOtp(req: Request, res: Response) {
 /** POST /api/auth/phone/verify — verifies the OTP and returns a session. */
 export async function verifyPhoneOtp(req: Request, res: Response) {
   const { phone, code, email, mode, fullName } = phoneVerifySchema.parse(req.body);
-  const e164 = toE164(phone);
 
-  // Re-enforce the signin/signup rules at verify time (defense in depth).
+  let e164: string;
+  if (mode === "signin") {
+    // Sign-in is by EMAIL for now (phone-based sign-in is commented out below
+    // — re-enable by restoring `e164 = toE164(phone as string)` here and the
+    // existence gate that used to run for signin, and dropping this lookup;
+    // see startPhoneOtp above for the matching change).
+    // e164 = toE164(phone as string);
+    const found = await findPhoneByEmail(email as string);
+    if (!found) {
+      throw new ApiError(404, "No account found for this email. Please create an account first.");
+    }
+    e164 = found;
+  } else {
+    e164 = toE164(phone as string);
+  }
+
+  // Re-enforce the signup rules at verify time (defense in depth). Sign-in
+  // existence is already guaranteed by the email lookup above.
   if (mode === "signup" && !fullName) {
     throw new ApiError(400, "Please enter your name to create an account.");
   }
@@ -282,9 +326,6 @@ export async function verifyPhoneOtp(req: Request, res: Response) {
   if (!lookupError) {
     if (mode === "signup" && exists) {
       throw new ApiError(409, "This number is already registered. Please sign in instead.");
-    }
-    if (mode === "signin" && !exists) {
-      throw new ApiError(404, "No account found for this number. Please create an account first.");
     }
   }
 
@@ -307,7 +348,7 @@ export async function verifyPhoneOtp(req: Request, res: Response) {
   // regardless of whether it went out by email or SMS. Mirrors startPhoneOtp's
   // channel decision so this only takes the branch that actually sent a code.
   // (WhatsApp temporarily disabled — was `whatsappConfigured || twilioConfigured`.)
-  const hadEmailChannel = mode === "signup" ? Boolean(email) : Boolean(await storedEmail(e164));
+  const hadEmailChannel = mode === "signup" ? Boolean(email) : true; // signin is always resolved via email above
   if (hadEmailChannel || twilioConfigured) {
     const result = checkOtp(e164, code);
     if (!result.ok) throw new ApiError(401, result.reason ?? "Invalid code.");
