@@ -180,6 +180,9 @@ export const phoneStartSchema = z.object({
     .regex(/^\+?[0-9\s-]{8,16}$/, "Enter a valid phone number"),
   // "signin" (must already have an account) or "signup" (must be a new number).
   mode: z.enum(["signin", "signup"]).default("signin"),
+  // Required for signup while OTP delivery is email-based — the code has to
+  // go somewhere. Signin looks the email up from the existing account instead.
+  email: z.string().email().optional().or(z.literal("")),
 });
 
 export const phoneVerifySchema = z.object({

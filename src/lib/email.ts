@@ -40,6 +40,22 @@ async function sendEmail({ to, subject, html, text }: SendArgs): Promise<void> {
   await t.sendMail({ from: env.SMTP_FROM || env.SMTP_USER, to, subject, html, text });
 }
 
+/** Sends a one-time sign-in verification code by email. */
+export async function sendOtpEmail(to: string, code: string): Promise<void> {
+  const subject = `${code} is your CONROY verification code`;
+  const text = `${code} is your CONROY verification code. It expires in 1 minute.\n\nIf you didn't request this, you can safely ignore this email.`;
+  const html = `
+  <div style="font-family:system-ui,Arial,sans-serif;max-width:480px;margin:0 auto;color:#111">
+    <h1 style="font-size:22px;letter-spacing:.1em;margin:0 0 24px">CONROY</h1>
+    <p style="line-height:1.6;color:#2e2e2e;margin:0 0 20px">Your verification code is:</p>
+    <p style="font-size:32px;font-weight:700;letter-spacing:.15em;margin:0 0 20px">${code}</p>
+    <p style="color:#767676;font-size:13px;line-height:1.6">
+      This code expires in 1 minute. If you didn't request it, you can safely ignore this email.
+    </p>
+  </div>`;
+  await sendEmail({ to, subject, html, text });
+}
+
 /** Sends the CONROY welcome email to a newly signed-up shopper. */
 export async function sendWelcomeEmail(to: string): Promise<void> {
   const subject = "Welcome to CONROY 👖";

@@ -3,9 +3,11 @@ import { supabaseAnon } from "../lib/supabase.js";
 import { ApiError } from "../middleware/errors.js";
 import { env } from "../config/env.js";
 import { supabaseAdmin } from "../lib/supabase.js";
-import { sendWelcomeEmail } from "../lib/email.js";
+import { sendWelcomeEmail, sendOtpEmail } from "../lib/email.js";
 import { twilioConfigured, sendSms } from "../lib/twilio.js";
-import { whatsappConfigured, sendWhatsappOtp } from "../lib/whatsapp.js";
+// WhatsApp OTP is temporarily disabled — authentication runs on email OTP for
+// now. Re-enable by uncommenting this import and the two blocks below.
+// import { whatsappConfigured, sendWhatsappOtp } from "../lib/whatsapp.js";
 import { generateOtp, saveOtp, checkOtp } from "../lib/otpStore.js";
 import { authSchema, phoneStartSchema, phoneVerifySchema, updateNameSchema } from "../validators/schemas.js";
 
@@ -30,6 +32,20 @@ async function storedName(e164: string): Promise<string | null> {
       .eq("phone", e164)
       .maybeSingle();
     return ((data?.full_name as string) || "").trim() || null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The customer's stored email, if we have one — used to deliver OTPs by email
+ * on sign-in without asking the shopper to type it in again. Best-effort: a
+ * lookup failure must never block authentication.
+ */
+async function storedEmail(e164: string): Promise<string | null> {
+  try {
+    const { data } = await supabaseAdmin.from("users").select("email").eq("phone", e164).maybeSingle();
+    return ((data?.email as string) || "").trim() || null;
   } catch {
     return null;
   }
@@ -98,6 +114,13 @@ async function finalizeAuth(
   }
 }
 
+/** Masks an email for display: "janavi@example.com" → "j***i@example.com". */
+function maskEmail(email: string): string {
+  const [user, domain] = email.split("@");
+  if (!domain || user.length <= 2) return email;
+  return `${user[0]}***${user[user.length - 1]}@${domain}`;
+}
+
 /** Normalises a phone number to E.164, applying the default country code. */
 function toE164(raw: string): string {
   const trimmed = raw.replace(/[\s-]/g, "");
@@ -153,7 +176,7 @@ export async function me(req: Request, res: Response) {
 
 /** POST /api/auth/phone/start — sends an OTP to the phone (SMS). */
 export async function startPhoneOtp(req: Request, res: Response) {
-  const { phone, mode } = phoneStartSchema.parse(req.body);
+  const { phone, mode, email } = phoneStartSchema.parse(req.body);
   const e164 = toE164(phone);
 
   // Gate before spending an OTP: signup needs a new number, signin an existing
@@ -179,20 +202,45 @@ export async function startPhoneOtp(req: Request, res: Response) {
     });
   }
 
-  // WhatsApp Cloud API: send the OTP from your WhatsApp Business number (no SMS,
-  // so no India DLT). We generate + verify the code ourselves.
-  if (whatsappConfigured) {
-    const code = generateOtp();
-    // Send first — only store the code once WhatsApp has accepted the message.
-    await sendWhatsappOtp(e164, code);
-    saveOtp(e164, code);
-    return res.json({
-      ok: true,
-      mock: false,
-      phone: e164,
-      channel: "whatsapp",
-      message: "A verification code has been sent on WhatsApp.",
-    });
+  // WhatsApp Cloud API — temporarily disabled in favour of email OTP (below).
+  // if (whatsappConfigured) {
+  //   const code = generateOtp();
+  //   // Send first — only store the code once WhatsApp has accepted the message.
+  //   await sendWhatsappOtp(e164, code);
+  //   saveOtp(e164, code);
+  //   return res.json({
+  //     ok: true,
+  //     mock: false,
+  //     phone: e164,
+  //     channel: "whatsapp",
+  //     message: "A verification code has been sent on WhatsApp.",
+  //   });
+  // }
+
+  // Email OTP (active channel): signup uses the email just entered; signin
+  // looks up the email already on file for this number. Attempted whenever an
+  // address is available — not gated on emailConfigured, since sendOtpEmail
+  // falls back to a console-logged mock itself when SMTP isn't set yet (same
+  // as the welcome email), so this works in dev before SMTP is configured.
+  {
+    const emailTo = mode === "signup" ? email || undefined : (await storedEmail(e164)) || undefined;
+    if (mode === "signup" && !emailTo) {
+      throw new ApiError(400, "Please enter your email to receive a verification code.");
+    }
+    if (emailTo) {
+      const code = generateOtp();
+      // Send first — only store the code once the email has been accepted.
+      await sendOtpEmail(emailTo, code);
+      saveOtp(e164, code);
+      return res.json({
+        ok: true,
+        mock: false,
+        phone: e164,
+        channel: "email",
+        message: `A verification code has been sent to ${maskEmail(emailTo)}.`,
+      });
+    }
+    // signin with no email on file — fall through to Twilio/Supabase below.
   }
 
   // Twilio-direct: we generate the OTP and send it via Twilio ourselves, using
@@ -253,9 +301,14 @@ export async function verifyPhoneOtp(req: Request, res: Response) {
     });
   }
 
-  // WhatsApp / Twilio-direct: verify against the code we generated + sent, then
-  // issue a lightweight session (same shape the mock path returns).
-  if (whatsappConfigured || twilioConfigured) {
+  // Email / Twilio-direct: verify against the code we generated + sent, then
+  // issue a lightweight session (same shape the mock path returns). checkOtp()
+  // is channel-agnostic — it just validates whatever code saveOtp() stored,
+  // regardless of whether it went out by email or SMS. Mirrors startPhoneOtp's
+  // channel decision so this only takes the branch that actually sent a code.
+  // (WhatsApp temporarily disabled — was `whatsappConfigured || twilioConfigured`.)
+  const hadEmailChannel = mode === "signup" ? Boolean(email) : Boolean(await storedEmail(e164));
+  if (hadEmailChannel || twilioConfigured) {
     const result = checkOtp(e164, code);
     if (!result.ok) throw new ApiError(401, result.reason ?? "Invalid code.");
     await finalizeAuth(e164, { mode, email: email || undefined, fullName });
