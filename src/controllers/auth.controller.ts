@@ -9,7 +9,13 @@ import { twilioConfigured, sendSms } from "../lib/twilio.js";
 // now. Re-enable by uncommenting this import and the two blocks below.
 // import { whatsappConfigured, sendWhatsappOtp } from "../lib/whatsapp.js";
 import { generateOtp, saveOtp, checkOtp } from "../lib/otpStore.js";
-import { authSchema, phoneStartSchema, phoneVerifySchema, updateNameSchema } from "../validators/schemas.js";
+import {
+  registerSchema,
+  loginSchema,
+  phoneStartSchema,
+  phoneVerifySchema,
+  updateNameSchema,
+} from "../validators/schemas.js";
 
 /** Builds a lightweight session for a verified phone number. */
 function phoneSession(e164: string, name?: string | null) {
@@ -142,35 +148,83 @@ function toE164(raw: string): string {
   return `${env.OTP_DEFAULT_COUNTRY_CODE}${trimmed.replace(/^0+/, "")}`;
 }
 
-/** POST /api/auth/register — creates a Supabase Auth user. */
+/**
+ * POST /api/auth/register — creates a Supabase Auth user (email + password)
+ * and the matching `users` row (phone is still the account's identity in the
+ * DB — orders/addresses/admin all key off it). No email is sent as part of
+ * this: password auth doesn't need a verification code, and the welcome
+ * email is deliberately skipped here (see finalizeAuth, which is only used
+ * by the OTP flow).
+ */
 export async function register(req: Request, res: Response) {
-  const { email, password, firstName } = authSchema.parse(req.body);
+  const { email, password, fullName, phone } = registerSchema.parse(req.body);
+  const e164 = toE164(phone);
 
-  const { data, error } = await supabaseAnon.auth.signUp({
-    email,
-    password,
-    options: { data: { first_name: firstName ?? null } },
-  });
-  if (error) throw new ApiError(400, error.message);
+  const { exists, error: lookupError } = await accountExists(e164);
+  if (!lookupError && exists) {
+    throw new ApiError(409, "This number is already registered. Please sign in instead.");
+  }
+
+  const { data: signUpData, error: signUpError } = await supabaseAnon.auth.signUp({ email, password });
+  if (signUpError) throw new ApiError(400, signUpError.message);
+
+  // Supabase's default "Confirm email" flow blocks sign-in until the user
+  // clicks a link Supabase emails them — auto-confirm immediately instead, so
+  // login works right away and no confirmation email is needed at all. (If
+  // "Confirm email" is enabled in the Supabase dashboard, Supabase will still
+  // have sent that one email during signUp() above — that's a project-level
+  // setting, not something this call can suppress in advance.)
+  if (signUpData.user?.id) {
+    const { error: confirmError } = await supabaseAdmin.auth.admin.updateUserById(signUpData.user.id, {
+      email_confirm: true,
+    });
+    if (confirmError) console.warn("Auto-confirm failed:", confirmError.message);
+  }
+
+  const { error: insertError } = await supabaseAdmin
+    .from("users")
+    .insert({ phone: e164, email, full_name: fullName });
+  if (insertError) {
+    // 23505 = unique violation — this number already has a row (race with
+    // the check above, or a stale one); either way it's already registered.
+    if (insertError.code === "23505") {
+      throw new ApiError(409, "This number is already registered. Please sign in instead.");
+    }
+    // Any other error (e.g. full_name column missing) — retry without it so
+    // a not-yet-migrated DB still lets people register.
+    const retry = await supabaseAdmin.from("users").insert({ phone: e164, email });
+    if (retry.error && retry.error.code === "23505") {
+      throw new ApiError(409, "This number is already registered. Please sign in instead.");
+    }
+  }
 
   res.status(201).json({
     ok: true,
-    message: "Account created. Please check your email to confirm if confirmation is enabled.",
-    data: { user: data.user, session: data.session },
+    message: "Account created.",
+    data: phoneSession(e164, fullName),
   });
 }
 
-/** POST /api/auth/login — exchanges credentials for a Supabase session. */
+/**
+ * POST /api/auth/login — verifies email + password against Supabase Auth,
+ * then resolves the matching phone-keyed account (the identity the rest of
+ * the app uses) and issues the same lightweight session the OTP flow does.
+ */
 export async function login(req: Request, res: Response) {
-  const { email, password } = authSchema.parse(req.body);
+  const { email, password } = loginSchema.parse(req.body);
 
-  const { data, error } = await supabaseAnon.auth.signInWithPassword({ email, password });
-  if (error) throw new ApiError(401, error.message);
+  const { error: signInError } = await supabaseAnon.auth.signInWithPassword({ email, password });
+  if (signInError) throw new ApiError(401, "Invalid email or password.");
+
+  const e164 = await findPhoneByEmail(email);
+  if (!e164) {
+    throw new ApiError(404, "Account details not found. Please contact support.");
+  }
 
   res.json({
     ok: true,
     message: "Signed in.",
-    data: { user: data.user, session: data.session },
+    data: phoneSession(e164, await storedName(e164)),
   });
 }
 

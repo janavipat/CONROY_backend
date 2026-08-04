@@ -166,10 +166,28 @@ export const inventoryUpdateSchema = z.object({
   status: z.enum(["active", "draft", "archived"]).optional(),
 });
 
+// Legacy — superseded by registerSchema/loginSchema below. Left in place,
+// unused, in case anything still needs the combined shape.
 export const authSchema = z.object({
   email: z.string().email("A valid email is required"),
   password: z.string().min(6, "Password must be at least 6 characters"),
   firstName: z.string().max(120).optional(),
+});
+
+// Email + password auth. Phone is still required at signup — it's the
+// account's identity in the DB (orders/addresses/admin all key off it) —
+// but it's just a stored field now, not part of authentication. Sign-in is
+// email + password only, no phone involved at all.
+export const registerSchema = z.object({
+  email: z.string().email("A valid email is required"),
+  password: z.string().min(6, "Password must be at least 6 characters"),
+  fullName: z.string().trim().min(1, "Please enter your name").max(120),
+  phone: z.string().trim().regex(/^\+?[0-9\s-]{8,16}$/, "Enter a valid phone number"),
+});
+
+export const loginSchema = z.object({
+  email: z.string().email("A valid email is required"),
+  password: z.string().min(1, "Please enter your password"),
 });
 
 // Phone OTP — accepts a 10-digit local number or a full E.164 (+CC…) number.
