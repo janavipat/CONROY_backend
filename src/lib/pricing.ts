@@ -1,5 +1,6 @@
 import { supabaseAdmin } from "./supabase.js";
 import { ApiError } from "../middleware/errors.js";
+import { enqueueCreateShipmentJob, fireShipmentJobNow } from "../services/shipping/jobs.js";
 
 export interface OrderLineItem {
   product_handle: string;
@@ -176,6 +177,15 @@ export async function persistOrder(params: {
       console.warn("Discount not stored (run offers.sql):", dErr.message);
       discount = 0;
     }
+  }
+
+  // Auto-ship: paid and COD orders are both confirmed, ready-to-fulfil orders
+  // — enqueue a create job, then try it immediately (best-effort, not
+  // awaited: checkout must never wait on Delhivery). See services/shipping/
+  // jobs.ts for why this is safe even if the immediate attempt gets cut off.
+  if (params.status === "paid" || params.status === "cod_pending") {
+    await enqueueCreateShipmentJob(order.id as string);
+    fireShipmentJobNow(order.id as string);
   }
 
   return { ...order, ...shipFields, discount, offer_code: params.offerCode ?? null, items: cart.lineItems };

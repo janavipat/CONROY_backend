@@ -4,6 +4,8 @@ import { asyncHandler } from "../middleware/asyncHandler.js";
 import { requireAdmin } from "../middleware/adminAuth.js";
 import { getSettings, updateSettings } from "../controllers/settings.controller.js";
 import { createShipmentAction, getShipmentForOrder } from "../controllers/shipping.controller.js";
+import { runShipmentJobs } from "../controllers/jobs.controller.js";
+import { delhiveryWebhook } from "../controllers/webhooks.controller.js";
 import { submitChat, listChat, setChatStatus, deleteChat } from "../controllers/chat.controller.js";
 import { listAddresses, saveAddresses } from "../controllers/address.controller.js";
 import { getProduct, listProducts } from "../controllers/products.controller.js";
@@ -116,6 +118,14 @@ router.post("/chat", asyncHandler(submitChat));
 // Saved delivery addresses (per customer, keyed by phone)
 router.get("/addresses", asyncHandler(listAddresses));
 router.put("/addresses", asyncHandler(saveAddresses));
+
+// Cron entrypoint — protected by CRON_SECRET (checked inside the handler,
+// not requireAdmin, since Vercel Cron authenticates differently). GET, not
+// POST: Vercel Cron Jobs always send a GET request, no way to configure that.
+router.get("/jobs/shipment/run", asyncHandler(runShipmentJobs));
+
+// Delhivery webhook — the path token is the auth (checked inside the handler).
+router.post("/webhooks/delhivery/:token", asyncHandler(delhiveryWebhook));
 
 // Analytics — public heartbeat from storefront visitors (live-visitor tracking)
 router.post("/track", asyncHandler(trackVisit));

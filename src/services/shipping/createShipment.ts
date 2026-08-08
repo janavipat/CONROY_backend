@@ -16,6 +16,8 @@ export interface CreateShipmentOutcome {
   message: string;
   alreadyShipped?: boolean;
   waybill?: string;
+  /** Set only when !ok — tells the job worker whether to retry or go dead. */
+  classification?: "transient" | "permanent";
 }
 
 async function markFailed(shipmentId: string, message: string): Promise<void> {
@@ -49,6 +51,7 @@ export async function createShipmentForOrder(orderId: string): Promise<CreateShi
   if (missing.length) {
     return {
       ok: false,
+      classification: "permanent",
       message: `Missing structured address field(s): ${missing.join(", ")}. This order predates the address migration or was placed before it — edit the order with the customer's full address first.`,
     };
   }
@@ -85,7 +88,7 @@ export async function createShipmentForOrder(orderId: string): Promise<CreateShi
   const items = (order.items as { product_handle: string; title: string; quantity: number }[]) ?? [];
   if (!items.length) {
     await markFailed(shipmentId, "Order has no items.");
-    return { ok: false, message: "Order has no items." };
+    return { ok: false, classification: "permanent", message: "Order has no items." };
   }
 
   const handles = [...new Set(items.map((i) => i.product_handle))];
@@ -99,7 +102,7 @@ export async function createShipmentForOrder(orderId: string): Promise<CreateShi
   if (unshippable.length) {
     const message = `Order contains non-shippable product(s): ${unshippable.map((i) => i.title).join(", ")}.`;
     await markFailed(shipmentId, message);
-    return { ok: false, message };
+    return { ok: false, classification: "permanent", message };
   }
 
   let totalWeightG = 0;
@@ -142,7 +145,11 @@ export async function createShipmentForOrder(orderId: string): Promise<CreateShi
       .from("shipments")
       .update({ status: "failed", declared_g: totalWeightG, create_response: result.raw, updated_at: new Date().toISOString() })
       .eq("id", shipmentId);
-    return { ok: false, message: result.error?.message ?? "Delhivery rejected the shipment." };
+    return {
+      ok: false,
+      classification: result.error?.classification ?? "transient",
+      message: result.error?.message ?? "Delhivery rejected the shipment.",
+    };
   }
 
   await supabaseAdmin

@@ -82,7 +82,16 @@ const EnvSchema = z.object({
   DELHIVERY_API_TOKEN: z.string().default(""),
   DELHIVERY_CLIENT_NAME: z.string().default(""),
   DELHIVERY_PICKUP_LOCATION: z.string().default(""),
-  DELHIVERY_WEBHOOK_SECRET: z.string().default(""),
+  // This Delhivery account has no shared-secret webhook signature available —
+  // the long random path segment IS the secret (spec's own fallback: "treat
+  // a long random path token as the minimum"). The webhook URL is
+  // /api/webhooks/delhivery/<this value>.
+  DELHIVERY_WEBHOOK_TOKEN: z.string().default(""),
+
+  // Vercel Cron sends `Authorization: Bearer $CRON_SECRET` automatically when
+  // this env var is set — used to verify /api/jobs/shipment/run isn't being
+  // hit by anyone else.
+  CRON_SECRET: z.string().default(""),
 });
 
 const parsed = EnvSchema.safeParse(process.env);
