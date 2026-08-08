@@ -26,6 +26,7 @@ import {
   trackVisit,
   getLiveVisitors,
   customerActivity,
+  syncCustomerCart,
   recordPageView,
   recordCartAdd,
   getAnalytics,
@@ -118,6 +119,7 @@ router.put("/addresses", asyncHandler(saveAddresses));
 router.post("/track", asyncHandler(trackVisit));
 router.post("/analytics/pageview", asyncHandler(recordPageView));
 router.post("/analytics/cart-add", asyncHandler(recordCartAdd));
+router.post("/cart/sync", asyncHandler(syncCustomerCart));
 
 // Wishlist / likes (public)
 router.post("/wishlist/toggle", asyncHandler(toggleLike));

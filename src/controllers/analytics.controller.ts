@@ -137,6 +137,74 @@ export async function recordCartAdd(req: Request, res: Response) {
   res.json({ ok: true });
 }
 
+/* ───────────────────────── Live cart mirror ─────────────────────────────── */
+
+const cartSyncSchema = z.object({
+  phone: z.string().min(1).max(40),
+  email: z.string().max(160).optional(),
+  items: z
+    .array(
+      z.object({
+        productHandle: z.string().min(1).max(160),
+        title: z.string().max(200).default(""),
+        image: z.string().max(600).optional(),
+        size: z.string().max(24).default(""),
+        quantity: z.coerce.number().int().min(1).max(999).default(1),
+        price: z.coerce.number().int().nonnegative().default(0),
+        currency: z.string().max(8).default("INR"),
+      }),
+    )
+    .max(200),
+});
+
+/**
+ * POST /api/cart/sync — replaces the stored cart for one signed-in customer
+ * with exactly what they now have.
+ *
+ * Full-state replace rather than add/remove deltas: a dropped request can't
+ * leave a phantom item behind, and the next sync self-heals. An empty `items`
+ * array clears the cart, which is how a removal reaches the admin.
+ */
+export async function syncCustomerCart(req: Request, res: Response) {
+  const input = cartSyncSchema.parse(req.body);
+
+  const { error: delErr } = await supabaseAdmin
+    .from("customer_carts")
+    .delete()
+    .eq("phone", input.phone);
+  if (delErr) {
+    // Table missing → customer-cart.sql hasn't been run. Never break checkout.
+    console.warn("cart not synced (run supabase/customer-cart.sql):", delErr.message);
+    res.json({ ok: true, stored: false });
+    return;
+  }
+
+  if (input.items.length > 0) {
+    const now = new Date().toISOString();
+    const { error: insErr } = await supabaseAdmin.from("customer_carts").insert(
+      input.items.map((i) => ({
+        phone: input.phone,
+        email: input.email ?? null,
+        product_handle: i.productHandle,
+        title: i.title,
+        image: i.image ?? null,
+        size: i.size,
+        quantity: i.quantity,
+        price: i.price,
+        currency: i.currency,
+        updated_at: now,
+      })),
+    );
+    if (insErr) {
+      console.warn("cart not synced:", insErr.message);
+      res.json({ ok: true, stored: false });
+      return;
+    }
+  }
+
+  res.json({ ok: true, stored: true, items: input.items.length });
+}
+
 /* ────────────────────── Admin: one customer's activity ──────────────────── */
 
 /** Human label for a storefront path. Product pages get their title upstream. */
@@ -195,7 +263,16 @@ export async function customerActivity(req: Request, res: Response) {
     .order("created_at", { ascending: false })
     .limit(500);
 
-  const [views, adds] = await Promise.all([viewsQuery, addsQuery]);
+  // The live cart — mirrors what the shopper can see right now, so a removal
+  // disappears here too. Keyed on phone only: it's replaced wholesale on every
+  // cart change, so there's no historical row to match on email.
+  const cartQuery = supabaseAdmin
+    .from("customer_carts")
+    .select("product_handle, title, image, size, quantity, price, currency, updated_at")
+    .eq("phone", phone)
+    .order("updated_at", { ascending: false });
+
+  const [views, adds, cart] = await Promise.all([viewsQuery, addsQuery, cartQuery]);
 
   // Resolve product titles + images once, for both the cart adds and any
   // /products/<handle> page views, so the UI can show a name not a URL.
@@ -262,9 +339,21 @@ export async function customerActivity(req: Request, res: Response) {
           at: a.created_at as string,
         };
       }),
+      // What is in the cart right now, newest line first.
+      cart: ((cart.data ?? []) as Record<string, unknown>[]).map((c) => ({
+        handle: c.product_handle as string,
+        title: (c.title as string) || (c.product_handle as string),
+        image: (c.image as string | null) ?? null,
+        size: (c.size as string | null) || null,
+        quantity: (c.quantity as number | null) ?? 1,
+        price: (c.price as number | null) ?? null,
+        currency: (c.currency as string | null) ?? "INR",
+        at: c.updated_at as string,
+      })),
       // Surfaced so the admin UI can explain an empty list rather than
       // implying the customer did nothing.
       migrationApplied: !(views.error?.code === "42703" || adds.error?.code === "42703"),
+      cartTableReady: !cart.error,
     },
   });
 }
