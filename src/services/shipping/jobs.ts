@@ -127,23 +127,14 @@ async function processJob(jobId: string): Promise<void> {
 }
 
 /**
- * Bounded time budget for the immediate-fire attempt. A plain unawaited
- * "fire and forget" was tried first and confirmed broken in practice
- * (2026-08-09): Vercel froze the function right after the response was
- * sent, cutting the attempt off mid-flight and leaving the job stuck in
- * 'running' forever (see reclaimStaleJobs). Awaiting with a hard cap trades
- * a small amount of checkout latency for the immediate attempt actually
- * having a chance to finish — comfortably above Delhivery's observed
- * response time (~1-2s) without risking a real hang.
- */
-const IMMEDIATE_FIRE_TIMEOUT_MS = 8_000;
-
-/**
- * Tries to process an order's create job right away, awaited by the caller
- * with a hard timeout — checkout still can't hang on a slow/down Delhivery,
- * but the common case now actually completes instead of just hoping a
- * background task survives. Falls back to the reclaim path + daily cron if
- * it doesn't finish in time or the process dies anyway.
+ * Best-effort immediate attempt, fired right after enqueueing — the caller
+ * does NOT await this (checkout must never wait on Delhivery: observed live
+ * 2026-08-09 taking ~2 minutes end-to-end for one real order, so any bounded
+ * timeout short enough to keep checkout responsive would just make it wait
+ * for nothing). If the process gets frozen or killed mid-attempt, the job is
+ * left in 'running' — reclaimStaleJobs() (run at the start of every cron
+ * pass) is what actually guarantees it doesn't get stuck there forever, not
+ * this function trying to finish in any particular amount of time.
  */
 export async function fireShipmentJobNow(orderId: string): Promise<void> {
   try {
@@ -154,12 +145,7 @@ export async function fireShipmentJobNow(orderId: string): Promise<void> {
       .eq("kind", "create")
       .eq("state", "queued")
       .maybeSingle();
-    if (!data) return;
-
-    await Promise.race([
-      processJob(data.id as string),
-      new Promise((resolve) => setTimeout(resolve, IMMEDIATE_FIRE_TIMEOUT_MS)),
-    ]);
+    if (data) await processJob(data.id as string);
   } catch (err) {
     console.warn("Immediate shipment job attempt failed (reclaim/cron will retry):", err);
   }

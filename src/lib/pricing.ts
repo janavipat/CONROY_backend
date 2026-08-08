@@ -180,13 +180,14 @@ export async function persistOrder(params: {
   }
 
   // Auto-ship: paid and COD orders are both confirmed, ready-to-fulfil orders
-  // — enqueue a create job, then try it right away. fireShipmentJobNow has
-  // its own hard timeout (8s) so this can't hang checkout on a slow/down
-  // Delhivery; if it doesn't finish in time, the job stays queued for the
-  // daily cron (or gets reclaimed if it was left mid-attempt — see jobs.ts).
+  // — enqueue a create job, then try it immediately, NOT awaited (checkout
+  // must never wait on Delhivery — observed live 2026-08-09 taking ~2
+  // minutes end-to-end on one order, so even fireShipmentJobNow's own 8s
+  // internal timeout wouldn't help here; the real safety net is
+  // reclaimStaleJobs() + the daily cron, not making checkout wait).
   if (params.status === "paid" || params.status === "cod_pending") {
     await enqueueCreateShipmentJob(order.id as string);
-    await fireShipmentJobNow(order.id as string);
+    void fireShipmentJobNow(order.id as string);
   }
 
   return { ...order, ...shipFields, discount, offer_code: params.offerCode ?? null, items: cart.lineItems };
