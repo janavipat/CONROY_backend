@@ -131,6 +131,9 @@ export const adminProductSchema = z.object({
   color: z.string().max(40).default(""),
   fit: z.string().min(1, "Type is required").max(60),
   price: z.coerce.number().int().nonnegative("Price must be 0 or more"),
+  // The struck-through "was" price (MRP). Null clears it; the column has always
+  // existed and been read by the catalog API, it just had no way to be set.
+  compareAtPrice: z.coerce.number().int().nonnegative().nullable().optional(),
   currency: z.string().max(8).default("INR"),
   stock: z.coerce.number().int().nonnegative().default(0),
   sku: z.string().max(80).optional().default(""),
