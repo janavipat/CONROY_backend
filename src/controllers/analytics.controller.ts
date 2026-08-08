@@ -1,16 +1,46 @@
 import type { Request, Response } from "express";
 import { z } from "zod";
-import { recordPing, snapshot } from "../lib/liveVisitors.js";
+import { recordPing, dropPing, snapshot } from "../lib/liveVisitors.js";
 import { supabaseAdmin } from "../lib/supabase.js";
 import { recordCartEvent, readCartEvents } from "../lib/cartEvents.js";
 import { ApiError } from "../middleware/errors.js";
 
 const pingSchema = z.object({
   sessionId: z.string().min(1).max(120),
+  // `path` is still accepted so older clients don't 400, but it is deliberately
+  // NOT stored — live visitors tracks presence, not behaviour.
   path: z.string().max(300).optional(),
+  name: z.string().max(120).optional(),
+  phone: z.string().max(40).optional(),
   tz: z.string().max(100).optional(),
   locale: z.string().max(35).optional(),
 });
+
+/**
+ * Approximate location from the request IP, resolved at the edge.
+ *
+ * Vercel sets these headers on every request at no cost, so there's no external
+ * geo-IP service to sign up for and — importantly — no browser permission
+ * prompt. Cloudflare's equivalents are read as a fallback.
+ */
+function edgeGeo(req: Request) {
+  const h = (k: string) => {
+    const v = req.headers[k];
+    const s = Array.isArray(v) ? v[0] : v;
+    return s ? decodeURIComponent(s) : undefined;
+  };
+  const num = (k: string) => {
+    const n = Number(h(k));
+    return Number.isFinite(n) ? n : undefined;
+  };
+  return {
+    countryCode: h("x-vercel-ip-country") ?? h("cf-ipcountry"),
+    region: h("x-vercel-ip-country-region"),
+    city: h("x-vercel-ip-city"),
+    latitude: num("x-vercel-ip-latitude"),
+    longitude: num("x-vercel-ip-longitude"),
+  };
+}
 
 /** POST /api/track — public heartbeat from storefront visitors. */
 /**
@@ -38,13 +68,27 @@ function orderStatusLabel(status: string): string {
 
 export async function trackVisit(req: Request, res: Response) {
   const ping = pingSchema.parse(req.body);
-  recordPing(ping);
+  await recordPing({
+    sessionId: ping.sessionId,
+    name: ping.name,
+    phone: ping.phone,
+    geo: edgeGeo(req),
+    tz: ping.tz,
+    locale: ping.locale,
+  });
+  res.json({ ok: true });
+}
+
+/** POST /api/track/leave — visitor closed the tab; drop them immediately. */
+export async function trackLeave(req: Request, res: Response) {
+  const { sessionId } = z.object({ sessionId: z.string().min(1).max(120) }).parse(req.body);
+  await dropPing(sessionId);
   res.json({ ok: true });
 }
 
 /** GET /api/admin/live — live-visitor snapshot for the admin dashboard. */
 export async function getLiveVisitors(_req: Request, res: Response) {
-  res.json({ ok: true, data: snapshot() });
+  res.json({ ok: true, data: await snapshot() });
 }
 
 /* ─────────────────────── Persisted analytics events ─────────────────────── */

@@ -1,145 +1,199 @@
+import { supabaseAdmin } from "./supabase.js";
+
 /**
- * In-memory live-visitor tracker. Storefront pages send a heartbeat every few
- * seconds; a visitor counts as "live" while seen within LIVE_TTL_MS. Geography
- * is derived from the client-provided locale (country) and timezone (city) —
- * no external geo-IP service, works offline and in local dev.
+ * Live-visitor presence.
  *
- * State is intentionally ephemeral (resets on restart) — it models presence,
- * not history. Persist to a table later if long-term analytics are needed.
+ * Storefront pages send a heartbeat every ~25s; a visitor counts as online
+ * while seen within LIVE_TTL_MS, and drops off automatically once they stop.
+ *
+ * Presence is stored in Postgres rather than process memory because the API
+ * runs on Vercel serverless — heartbeats and admin reads routinely land on
+ * different instances, so an in-memory Map would report the wrong count.
+ *
+ * This models presence only: who is online, and roughly where. Nothing about
+ * which page they are on, what they viewed, or how long they stayed.
  */
 
-const LIVE_TTL_MS = 60_000; // a session is "live" if seen in the last 60s
+const LIVE_TTL_MS = 75_000; // online if seen in the last 75s (≈3 missed beats)
 
 export interface VisitorPing {
   sessionId: string;
-  path?: string;
-  tz?: string; // IANA timezone, e.g. "Asia/Kolkata"
-  locale?: string; // e.g. "en-IN"
+  /** Customer name when signed in. */
+  name?: string;
+  phone?: string;
+  /** Approximate location resolved from the request IP at the edge. */
+  geo?: EdgeGeo;
+  /** Fallbacks used only when the edge gave us nothing. */
+  tz?: string;
+  locale?: string;
 }
 
-interface Visit {
-  lastSeen: number;
-  path: string;
-  countryCode: string;
-  country: string;
-  city: string;
-  flag: string;
+export interface EdgeGeo {
+  countryCode?: string;
+  country?: string;
+  region?: string;
+  city?: string;
+  latitude?: number;
+  longitude?: number;
 }
 
-const store = new Map<string, Visit>();
-const seenSessions = new Set<string>();
-let totalSessions = 0;
-
-const COUNTRIES: Record<string, { name: string; flag: string }> = {
-  IN: { name: "India", flag: "🇮🇳" },
-  US: { name: "United States", flag: "🇺🇸" },
-  GB: { name: "United Kingdom", flag: "🇬🇧" },
-  AE: { name: "United Arab Emirates", flag: "🇦🇪" },
-  CA: { name: "Canada", flag: "🇨🇦" },
-  AU: { name: "Australia", flag: "🇦🇺" },
-  SG: { name: "Singapore", flag: "🇸🇬" },
-  DE: { name: "Germany", flag: "🇩🇪" },
-  FR: { name: "France", flag: "🇫🇷" },
-  NL: { name: "Netherlands", flag: "🇳🇱" },
-  ES: { name: "Spain", flag: "🇪🇸" },
-  IT: { name: "Italy", flag: "🇮🇹" },
-  SA: { name: "Saudi Arabia", flag: "🇸🇦" },
-  JP: { name: "Japan", flag: "🇯🇵" },
-  BD: { name: "Bangladesh", flag: "🇧🇩" },
-  PK: { name: "Pakistan", flag: "🇵🇰" },
-  LK: { name: "Sri Lanka", flag: "🇱🇰" },
-  NP: { name: "Nepal", flag: "🇳🇵" },
-  MY: { name: "Malaysia", flag: "🇲🇾" },
-  ZA: { name: "South Africa", flag: "🇿🇦" },
+const COUNTRY_NAMES: Record<string, string> = {
+  IN: "India", US: "United States", GB: "United Kingdom", AE: "United Arab Emirates",
+  CA: "Canada", AU: "Australia", SG: "Singapore", DE: "Germany", FR: "France",
+  NL: "Netherlands", ES: "Spain", IT: "Italy", SA: "Saudi Arabia", JP: "Japan",
+  BD: "Bangladesh", PK: "Pakistan", LK: "Sri Lanka", NP: "Nepal", MY: "Malaysia",
+  ZA: "South Africa", NZ: "New Zealand", IE: "Ireland", CH: "Switzerland",
+  SE: "Sweden", NO: "Norway", BR: "Brazil", MX: "Mexico", CN: "China", KR: "South Korea",
 };
 
-function regionFromLocale(locale?: string): string {
-  if (!locale) return "";
-  const m = locale.match(/[-_]([A-Za-z]{2})\b/);
-  return m ? m[1].toUpperCase() : "";
+/** Regional-indicator flag for an ISO-3166 alpha-2 code. */
+export function flagFor(cc?: string | null): string {
+  if (!cc || cc.length !== 2 || !/^[A-Za-z]{2}$/.test(cc)) return "🌐";
+  const base = 0x1f1e6;
+  const up = cc.toUpperCase();
+  return String.fromCodePoint(base + up.charCodeAt(0) - 65, base + up.charCodeAt(1) - 65);
 }
 
-function cityFromTz(tz?: string): string {
-  if (!tz) return "";
-  return (tz.split("/").pop() ?? "").replace(/_/g, " ");
+export function countryName(cc?: string | null): string {
+  if (!cc) return "Unknown";
+  return COUNTRY_NAMES[cc.toUpperCase()] ?? cc.toUpperCase();
 }
 
-function deriveGeo(locale?: string, tz?: string) {
-  const cc = regionFromLocale(locale);
-  const meta = COUNTRIES[cc];
-  return {
-    countryCode: cc || "??",
-    country: meta?.name ?? (cc || "Unknown"),
-    flag: meta?.flag ?? "🌐",
-    city: cityFromTz(tz),
-  };
+/** Locale/timezone fallback for local dev, where there are no edge geo headers. */
+function fallbackGeo(locale?: string, tz?: string): EdgeGeo {
+  const cc = locale?.match(/[-_]([A-Za-z]{2})\b/)?.[1]?.toUpperCase();
+  const city = tz ? (tz.split("/").pop() ?? "").replace(/_/g, " ") : undefined;
+  return { countryCode: cc, country: cc ? countryName(cc) : undefined, city };
 }
 
-function prune() {
-  const now = Date.now();
-  for (const [id, v] of store) {
-    if (now - v.lastSeen > LIVE_TTL_MS) store.delete(id);
+/**
+ * Records a heartbeat. Upsert on session id, so a visitor is one row however
+ * many beats they send, and `last_seen` is what makes them fall offline.
+ */
+export async function recordPing(p: VisitorPing): Promise<void> {
+  const edge = p.geo ?? {};
+  const hasEdge = Boolean(edge.countryCode || edge.city);
+  const geo = hasEdge ? edge : fallbackGeo(p.locale, p.tz);
+
+  const { error } = await supabaseAdmin.from("live_visitors").upsert(
+    {
+      session_id: p.sessionId,
+      display_name: p.name ?? null,
+      phone: p.phone ?? null,
+      country_code: geo.countryCode ?? null,
+      country: geo.country ?? (geo.countryCode ? countryName(geo.countryCode) : null),
+      region: geo.region ?? null,
+      city: geo.city ?? null,
+      latitude: geo.latitude ?? null,
+      longitude: geo.longitude ?? null,
+      last_seen: new Date().toISOString(),
+    },
+    { onConflict: "session_id" },
+  );
+
+  if (error) {
+    console.warn("live visitor not recorded (run supabase/live-visitors.sql):", error.message);
+    return;
   }
+
+  // Opportunistic cleanup — cheap, and keeps the table to just who's online.
+  void supabaseAdmin
+    .from("live_visitors")
+    .delete()
+    .lt("last_seen", new Date(Date.now() - LIVE_TTL_MS * 4).toISOString())
+    .then(() => undefined);
 }
 
-/** Record a heartbeat from a storefront visitor. */
-export function recordPing(p: VisitorPing): void {
-  const geo = deriveGeo(p.locale, p.tz);
-  store.set(p.sessionId, { lastSeen: Date.now(), path: p.path || "/", ...geo });
-  if (!seenSessions.has(p.sessionId)) {
-    seenSessions.add(p.sessionId);
-    totalSessions += 1;
-  }
-  prune();
+/** Marks a session offline immediately (sent on tab close). */
+export async function dropPing(sessionId: string): Promise<void> {
+  await supabaseAdmin.from("live_visitors").delete().eq("session_id", sessionId);
+}
+
+export interface LiveVisitorRow {
+  id: string;
+  /** Customer name when signed in, otherwise a stable short Visitor ID. */
+  label: string;
+  loggedIn: boolean;
+  country: string;
+  countryCode: string | null;
+  flag: string;
+  region: string | null;
+  city: string | null;
+  latitude: number | null;
+  longitude: number | null;
+  since: string;
+  lastSeen: string;
 }
 
 export interface LiveSnapshot {
   live: number;
-  totalSessions: number;
-  locations: {
-    countryCode: string;
-    country: string;
-    flag: string;
-    count: number;
-    cities: string[];
-  }[];
-  pages: { path: string; count: number }[];
+  loggedIn: number;
+  guests: number;
+  visitors: LiveVisitorRow[];
+  locations: { countryCode: string; country: string; flag: string; count: number; cities: string[] }[];
+  /** False when live-visitors.sql hasn't been applied yet. */
+  tableReady: boolean;
 }
 
-/** Current live-visitor snapshot, grouped by country and by page. */
-export function snapshot(): LiveSnapshot {
-  prune();
-  const visits = [...store.values()];
+/** A short, stable, non-identifying label for an anonymous visitor. */
+function visitorId(sessionId: string): string {
+  let h = 0;
+  for (let i = 0; i < sessionId.length; i++) h = (h * 31 + sessionId.charCodeAt(i)) >>> 0;
+  return `Visitor #${h.toString(36).toUpperCase().slice(0, 5)}`;
+}
 
-  const byCountry = new Map<
-    string,
-    { countryCode: string; country: string; flag: string; count: number; cities: Set<string> }
-  >();
-  for (const v of visits) {
-    const e =
-      byCountry.get(v.countryCode) ??
-      { countryCode: v.countryCode, country: v.country, flag: v.flag, count: 0, cities: new Set<string>() };
-    e.count += 1;
-    if (v.city) e.cities.add(v.city);
-    byCountry.set(v.countryCode, e);
+/** Who is online right now. */
+export async function snapshot(): Promise<LiveSnapshot> {
+  const cutoff = new Date(Date.now() - LIVE_TTL_MS).toISOString();
+  const { data, error } = await supabaseAdmin
+    .from("live_visitors")
+    .select("*")
+    .gte("last_seen", cutoff)
+    .order("last_seen", { ascending: false });
+
+  if (error) {
+    return { live: 0, loggedIn: 0, guests: 0, visitors: [], locations: [], tableReady: false };
   }
 
-  const locations = [...byCountry.values()]
-    .map((e) => ({
-      countryCode: e.countryCode,
-      country: e.country,
-      flag: e.flag,
-      count: e.count,
-      cities: [...e.cities],
-    }))
-    .sort((a, b) => b.count - a.count);
+  const rows = (data ?? []) as Record<string, unknown>[];
+  const visitors: LiveVisitorRow[] = rows.map((r) => {
+    const name = (r.display_name as string | null) ?? null;
+    const cc = (r.country_code as string | null) ?? null;
+    return {
+      id: r.session_id as string,
+      label: name || visitorId(r.session_id as string),
+      loggedIn: Boolean(name),
+      country: (r.country as string | null) ?? countryName(cc),
+      countryCode: cc,
+      flag: flagFor(cc),
+      region: (r.region as string | null) ?? null,
+      city: (r.city as string | null) ?? null,
+      latitude: (r.latitude as number | null) ?? null,
+      longitude: (r.longitude as number | null) ?? null,
+      since: r.first_seen as string,
+      lastSeen: r.last_seen as string,
+    };
+  });
 
-  const byPage = new Map<string, number>();
-  for (const v of visits) byPage.set(v.path, (byPage.get(v.path) ?? 0) + 1);
-  const pages = [...byPage.entries()]
-    .map(([path, count]) => ({ path, count }))
-    .sort((a, b) => b.count - a.count)
-    .slice(0, 6);
+  const byCountry = new Map<string, { countryCode: string; country: string; flag: string; count: number; cities: Set<string> }>();
+  for (const v of visitors) {
+    const key = v.countryCode ?? "??";
+    const e = byCountry.get(key) ?? {
+      countryCode: key, country: v.country, flag: v.flag, count: 0, cities: new Set<string>(),
+    };
+    e.count += 1;
+    if (v.city) e.cities.add(v.city);
+    byCountry.set(key, e);
+  }
 
-  return { live: visits.length, totalSessions, locations, pages };
+  return {
+    live: visitors.length,
+    loggedIn: visitors.filter((v) => v.loggedIn).length,
+    guests: visitors.filter((v) => !v.loggedIn).length,
+    visitors,
+    locations: [...byCountry.values()]
+      .map((e) => ({ ...e, cities: [...e.cities] }))
+      .sort((a, b) => b.count - a.count),
+    tableReady: true,
+  };
 }

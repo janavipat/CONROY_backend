@@ -27,6 +27,7 @@ import {
   getLiveVisitors,
   customerActivity,
   syncCustomerCart,
+  trackLeave,
   recordPageView,
   recordCartAdd,
   getAnalytics,
@@ -117,6 +118,7 @@ router.put("/addresses", asyncHandler(saveAddresses));
 
 // Analytics — public heartbeat from storefront visitors (live-visitor tracking)
 router.post("/track", asyncHandler(trackVisit));
+router.post("/track/leave", asyncHandler(trackLeave));
 router.post("/analytics/pageview", asyncHandler(recordPageView));
 router.post("/analytics/cart-add", asyncHandler(recordCartAdd));
 router.post("/cart/sync", asyncHandler(syncCustomerCart));
