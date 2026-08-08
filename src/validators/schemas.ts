@@ -283,9 +283,15 @@ export const FULFILLMENT_STATUSES = [
   "Confirmed",
   "Processing",
   "Packed",
+  // From here on, statuses are driven by courier events (see
+  // lib/shipping/providers/delhivery/status-map.ts) rather than set directly.
+  "Manifested",
   "Shipped",
   "Out For Delivery",
   "Delivered",
+  "Attempt Failed",
+  "Returning",
+  "Returned",
   "Cancelled",
 ] as const;
 
