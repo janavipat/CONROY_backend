@@ -144,23 +144,23 @@ export async function persistOrder(params: {
 
   // Best-effort: store the structured address. Ignored if shipping.sql not run
   // — checkout must keep working even before the migration is applied.
+  let shipFields: Record<string, unknown> = {};
   if (params.shipAddress) {
     const a = params.shipAddress;
-    const { error: shipErr } = await supabaseAdmin
-      .from("orders")
-      .update({
-        ship_name: a.name,
-        ship_phone: a.phone,
-        ship_line1: a.line1,
-        ship_line2: a.line2 || null,
-        ship_city: a.city,
-        ship_state: a.state,
-        ship_pincode: a.pincode,
-        ship_country: a.country || "India",
-      })
-      .eq("id", order.id);
+    shipFields = {
+      ship_name: a.name,
+      ship_phone: a.phone,
+      ship_line1: a.line1,
+      ship_line2: a.line2 || null,
+      ship_city: a.city,
+      ship_state: a.state,
+      ship_pincode: a.pincode,
+      ship_country: a.country || "India",
+    };
+    const { error: shipErr } = await supabaseAdmin.from("orders").update(shipFields).eq("id", order.id);
     if (shipErr) {
       console.warn("Structured address not stored (run shipping.sql):", shipErr.message);
+      shipFields = {};
     }
   }
 
@@ -178,5 +178,5 @@ export async function persistOrder(params: {
     }
   }
 
-  return { ...order, discount, offer_code: params.offerCode ?? null, items: cart.lineItems };
+  return { ...order, ...shipFields, discount, offer_code: params.offerCode ?? null, items: cart.lineItems };
 }
