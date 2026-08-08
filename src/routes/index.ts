@@ -25,6 +25,7 @@ import {
 import {
   trackVisit,
   getLiveVisitors,
+  customerActivity,
   recordPageView,
   recordCartAdd,
   getAnalytics,
@@ -182,6 +183,7 @@ router.post("/admin/whatsapp/test", asyncHandler(whatsappTest));
 router.get("/admin/orders", asyncHandler(listAllOrders));
 router.get("/admin/orders/:id", asyncHandler(getAdminOrder));
 router.get("/admin/customers", asyncHandler(listCustomers));
+router.get("/admin/customers/:phone/activity", asyncHandler(customerActivity));
 router.get("/admin/accounts", asyncHandler(getAccounts));
 router.get("/admin/subscribers", asyncHandler(listSubscribers));
 router.get("/admin/contacts", asyncHandler(listContacts));

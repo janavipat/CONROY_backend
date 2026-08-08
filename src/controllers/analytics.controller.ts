@@ -3,6 +3,7 @@ import { z } from "zod";
 import { recordPing, snapshot } from "../lib/liveVisitors.js";
 import { supabaseAdmin } from "../lib/supabase.js";
 import { recordCartEvent, readCartEvents } from "../lib/cartEvents.js";
+import { ApiError } from "../middleware/errors.js";
 
 const pingSchema = z.object({
   sessionId: z.string().min(1).max(120),
@@ -52,6 +53,10 @@ const pageViewSchema = z.object({
   sessionId: z.string().min(1).max(120),
   path: z.string().min(1).max(300),
   durationMs: z.coerce.number().int().nonnegative().max(86_400_000).default(0),
+  // Present when the visitor is signed in — lets the admin replay one
+  // customer's journey rather than an anonymous session.
+  phone: z.string().max(40).optional(),
+  email: z.string().max(160).optional(),
 });
 
 const cartAddSchema = z.object({
@@ -59,15 +64,45 @@ const cartAddSchema = z.object({
   productHandle: z.string().min(1).max(160),
   phone: z.string().max(40).optional(),
   email: z.string().max(160).optional(),
+  // What was actually added. `price` is captured at add-time so later price
+  // changes never rewrite the history.
+  size: z.string().max(24).optional(),
+  quantity: z.coerce.number().int().min(1).max(999).default(1),
+  price: z.coerce.number().int().nonnegative().optional(),
+  currency: z.string().max(8).default("INR"),
 });
+
+/**
+ * Inserts `full`; if the newer columns aren't there yet (customer-activity.sql
+ * not applied), retries with `base` so the row is still recorded rather than
+ * lost entirely. Analytics must never fail loudly.
+ */
+async function insertWithFallback(
+  table: "page_views" | "cart_adds",
+  full: Record<string, unknown>,
+  base: Record<string, unknown>,
+): Promise<void> {
+  const { error } = await supabaseAdmin.from(table).insert(full);
+  if (!error) return;
+  // 42703 = undefined_column, PGRST204 = column not in schema cache.
+  if (error.code === "42703" || error.code === "PGRST204") {
+    const { error: retry } = await supabaseAdmin.from(table).insert(base);
+    if (retry) console.warn(`${table} not stored:`, retry.message);
+    else console.warn(`${table}: stored without the newer columns — run supabase/customer-activity.sql`);
+    return;
+  }
+  console.warn(`${table} not stored (run analytics.sql):`, error.message);
+}
 
 /** POST /api/analytics/pageview — records a page view + time-on-page. */
 export async function recordPageView(req: Request, res: Response) {
   const input = pageViewSchema.parse(req.body);
-  await supabaseAdmin
-    .from("page_views")
-    .insert({ session_id: input.sessionId, path: input.path, duration_ms: input.durationMs })
-    .then(({ error }) => error && console.warn("page_view not stored (run analytics.sql):", error.message));
+  const base = { session_id: input.sessionId, path: input.path, duration_ms: input.durationMs };
+  await insertWithFallback(
+    "page_views",
+    { ...base, phone: input.phone ?? null, email: input.email ?? null },
+    base,
+  );
   res.json({ ok: true });
 }
 
@@ -75,10 +110,19 @@ export async function recordPageView(req: Request, res: Response) {
 export async function recordCartAdd(req: Request, res: Response) {
   const input = cartAddSchema.parse(req.body);
   const base = { session_id: input.sessionId, product_handle: input.productHandle };
-  await supabaseAdmin
-    .from("cart_adds")
-    .insert(base)
-    .then(({ error }) => error && console.warn("cart_add not stored (run analytics.sql):", error.message));
+  await insertWithFallback(
+    "cart_adds",
+    {
+      ...base,
+      phone: input.phone ?? null,
+      email: input.email ?? null,
+      size: input.size ?? null,
+      quantity: input.quantity,
+      price: input.price ?? null,
+      currency: input.currency,
+    },
+    base,
+  );
 
   // Attribute to a signed-in customer in Storage (no migration needed) so the
   // admin can see customer-wise abandoned carts. Fire-and-forget.
@@ -91,6 +135,138 @@ export async function recordCartAdd(req: Request, res: Response) {
     });
   }
   res.json({ ok: true });
+}
+
+/* ────────────────────── Admin: one customer's activity ──────────────────── */
+
+/** Human label for a storefront path. Product pages get their title upstream. */
+function pageLabel(path: string): string {
+  const clean = path.split("?")[0].replace(/\/$/, "") || "/";
+  if (clean === "/") return "Home page";
+  if (clean === "/collections/all") return "Collection";
+  if (clean.startsWith("/collections/")) return `Collection: ${clean.slice(13)}`;
+  if (clean === "/cart") return "Cart";
+  if (clean.startsWith("/checkout")) return "Checkout";
+  if (clean === "/search") return "Search";
+  if (clean === "/about") return "About us";
+  if (clean === "/contact") return "Contact";
+  if (clean === "/policy") return "Store policy";
+  if (clean === "/terms") return "Terms & conditions";
+  if (clean.startsWith("/account")) return `Account${clean.slice(8) ? ` · ${clean.slice(9)}` : ""}`;
+  if (clean.startsWith("/products/")) return `Product: ${clean.slice(10)}`;
+  return clean;
+}
+
+/**
+ * GET /api/admin/customers/:phone/activity
+ *
+ * Everything that customer did, newest first — pages visited with time spent,
+ * and every add-to-cart with the product, size, quantity and the price at the
+ * time. Add-to-cart is read from `cart_adds`, never from orders, so items that
+ * were never purchased still appear.
+ */
+export async function customerActivity(req: Request, res: Response) {
+  const phone = decodeURIComponent(req.params.phone ?? "");
+  if (!phone) throw new ApiError(400, "A customer phone is required.");
+
+  // The email on file, so activity recorded before/without a phone still matches.
+  const { data: user } = await supabaseAdmin
+    .from("users")
+    .select("email")
+    .eq("phone", phone)
+    .maybeSingle();
+  const email = (user?.email as string | undefined) ?? null;
+
+  // Match on phone, or on the account email when we have one — activity
+  // recorded before a phone was attached still belongs to this customer.
+  const filter = email ? `phone.eq.${phone},email.eq.${email}` : `phone.eq.${phone}`;
+
+  const viewsQuery = supabaseAdmin
+    .from("page_views")
+    .select("path, duration_ms, created_at")
+    .or(filter)
+    .order("created_at", { ascending: false })
+    .limit(500);
+
+  const addsQuery = supabaseAdmin
+    .from("cart_adds")
+    .select("product_handle, size, quantity, price, currency, created_at")
+    .or(filter)
+    .order("created_at", { ascending: false })
+    .limit(500);
+
+  const [views, adds] = await Promise.all([viewsQuery, addsQuery]);
+
+  // Resolve product titles + images once, for both the cart adds and any
+  // /products/<handle> page views, so the UI can show a name not a URL.
+  const viewedHandles = ((views.data ?? []) as { path: string }[])
+    .map((v) => /^\/products\/([^/?#]+)/.exec(v.path)?.[1])
+    .filter((h): h is string => Boolean(h));
+  const handles = [
+    ...new Set([
+      ...((adds.data ?? []) as { product_handle: string }[]).map((a) => a.product_handle),
+      ...viewedHandles,
+    ]),
+  ];
+  const products = handles.length
+    ? (
+        await supabaseAdmin
+          .from("products")
+          .select("handle, title, price, currency, images:product_images(src, alt, position)")
+          .in("handle", handles)
+      ).data ?? []
+    : [];
+
+  type ImageRow = { src: string; position: number };
+  const byHandle = new Map(
+    (products as { handle: string; title: string; price: number; currency: string; images?: ImageRow[] }[]).map(
+      (p) => [
+        p.handle,
+        {
+          title: p.title,
+          price: p.price,
+          currency: p.currency,
+          image:
+            (p.images ?? []).slice().sort((a, b) => a.position - b.position)[0]?.src ?? null,
+        },
+      ],
+    ),
+  );
+
+  res.json({
+    ok: true,
+    data: {
+      pageViews: ((views.data ?? []) as Record<string, unknown>[]).map((v) => {
+        const path = v.path as string;
+        const handle = /^\/products\/([^/?#]+)/.exec(path)?.[1];
+        const title = handle ? byHandle.get(handle)?.title : undefined;
+        return {
+          path,
+          label: title ? `Product: ${title}` : pageLabel(path),
+          durationMs: Math.min((v.duration_ms as number) ?? 0, MAX_VIEW_MS),
+          at: v.created_at as string,
+        };
+      }),
+      cartAdds: ((adds.data ?? []) as Record<string, unknown>[]).map((a) => {
+        const p = byHandle.get(a.product_handle as string);
+        return {
+          handle: a.product_handle as string,
+          title: p?.title ?? (a.product_handle as string),
+          image: p?.image ?? null,
+          size: (a.size as string | null) ?? null,
+          quantity: (a.quantity as number | null) ?? 1,
+          // Fall back to the catalogue price for rows added before the
+          // migration, when nothing was captured at add-time.
+          price: (a.price as number | null) ?? p?.price ?? null,
+          currency: (a.currency as string | null) ?? p?.currency ?? "INR",
+          at: a.created_at as string,
+        };
+      }),
+      // Surfaced so the admin UI can explain an empty list rather than
+      // implying the customer did nothing.
+      migrationApplied: !(views.error?.code === "42703" || adds.error?.code === "42703"),
+    },
+  });
 }
 
 /**
