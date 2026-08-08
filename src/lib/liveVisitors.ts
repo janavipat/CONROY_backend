@@ -89,27 +89,33 @@ export async function recordPing(p: VisitorPing): Promise<void> {
     country_code: geo.countryCode ?? null,
     country: geo.country ?? (geo.countryCode ? countryName(geo.countryCode) : null),
     region: geo.region ?? null,
-    city: geo.city ?? null,
+    city: null,
     district: null,
-    latitude: geo.latitude ?? null,
-    longitude: geo.longitude ?? null,
+    // Coordinates are never stored: only state + country is ever displayed, so
+    // holding a customer's exact position would be data we have no use for.
+    latitude: null,
+    longitude: null,
     precise: false,
     last_seen: new Date().toISOString(),
   };
 
-  // A consented GPS fix wins outright: resolve it to a place name and overwrite
-  // every geo field, so a stale IP guess can never leak through alongside it.
-  if (p.coords) {
-    row.latitude = p.coords.latitude;
-    row.longitude = p.coords.longitude;
-    row.precise = true;
-    const place = await reverseGeocode(p.coords.latitude, p.coords.longitude);
+  // Resolve whichever coordinates we have to a place name. A consented GPS fix
+  // wins; otherwise the edge's IP coordinates are used, which still beats the
+  // raw edge fields — those give a state CODE ("GJ") where geocoding gives the
+  // name ("Gujarat"). `precise` is what records which source it came from.
+  const fix = p.coords
+    ? { lat: p.coords.latitude, lon: p.coords.longitude, precise: true }
+    : geo.latitude != null && geo.longitude != null
+      ? { lat: geo.latitude, lon: geo.longitude, precise: false }
+      : null;
+
+  if (fix) {
+    row.precise = fix.precise;
+    const place = await reverseGeocode(fix.lat, fix.lon);
     if (place) {
-      row.city = place.city ?? null;
-      row.district = place.district ?? null;
-      row.region = place.region ?? null;
-      row.country = place.country ?? null;
-      row.country_code = place.countryCode ?? null;
+      row.region = place.region ?? row.region;
+      row.country = place.country ?? row.country;
+      row.country_code = place.countryCode ?? row.country_code;
     }
   }
 
