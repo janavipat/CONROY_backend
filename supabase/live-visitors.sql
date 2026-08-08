@@ -9,13 +9,8 @@
 -- This is presence, not history: one row per session, overwritten on each
 -- heartbeat, deleted once stale. Nothing about pages or behaviour is stored.
 --
--- Run in Supabase → SQL Editor. TWO PASSES — the index references the table
--- created in the same script. Run PART 1, clear the editor, run PART 2.
--- Safe to re-run.
+-- Run in Supabase → SQL Editor. Safe to re-run.
 -- ─────────────────────────────────────────────────────────────────────────────
-
-
--- ══════════════════ PART 1 — table (run this alone first) ═══════════════════
 
 create table if not exists public.live_visitors (
   session_id   text primary key,
@@ -33,8 +28,11 @@ create table if not exists public.live_visitors (
   last_seen    timestamptz not null default now()
 );
 
+create index if not exists live_visitors_last_seen_idx
+  on public.live_visitors (last_seen desc);
 
--- ══════════════ PART 2 — index (run after PART 1 succeeds) ══════════════════
-
--- create index if not exists live_visitors_last_seen_idx
---   on public.live_visitors (last_seen desc);
+-- The API talks to the DB with the service-role key (which bypasses RLS), so
+-- this just needs to be ON with no policies — that blocks the anon/authenticated
+-- keys (which are public, embedded in frontend JS) from reading rows directly,
+-- including phone numbers, over the auto-generated REST API.
+alter table public.live_visitors enable row level security;
