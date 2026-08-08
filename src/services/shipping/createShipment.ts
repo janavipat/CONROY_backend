@@ -152,7 +152,7 @@ export async function createShipmentForOrder(orderId: string): Promise<CreateShi
     };
   }
 
-  await supabaseAdmin
+  const { error: shipUpdateErr } = await supabaseAdmin
     .from("shipments")
     .update({
       waybill: result.waybill,
@@ -162,11 +162,20 @@ export async function createShipmentForOrder(orderId: string): Promise<CreateShi
       updated_at: new Date().toISOString(),
     })
     .eq("id", shipmentId);
+  if (shipUpdateErr) {
+    console.error(`Shipment ${shipmentId} created on Delhivery (waybill ${result.waybill}) but the DB update failed:`, shipUpdateErr.message);
+  }
 
   // First transition after creation — always a forward move from
   // Pending/Confirmed, so no need for the monotonic-rank check that webhook
   // events (applyScan.ts, not yet built) will need.
-  await supabaseAdmin.from("orders").update({ fulfillment_status: "Manifested" }).eq("id", orderId);
+  const { error: orderUpdateErr } = await supabaseAdmin
+    .from("orders")
+    .update({ fulfillment_status: "Manifested" })
+    .eq("id", orderId);
+  if (orderUpdateErr) {
+    console.error(`Order ${orderId} shipped (waybill ${result.waybill}) but fulfillment_status update failed:`, orderUpdateErr.message);
+  }
 
   return {
     ok: true,

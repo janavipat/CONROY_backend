@@ -9,6 +9,23 @@
 -- ============================================================================
 
 
+-- ──────────── Fix: fulfillment_status CHECK constraint was never extended ──
+-- cancel-order.sql's orders_fulfillment_status_chk only allowed the original
+-- 8 values — Manifested/Attempt Failed/Returning/Returned (added when the
+-- Delhivery status-map was built) were silently rejected by Postgres on
+-- every write, and createShipmentForOrder didn't check that update's error
+-- (found 2026-08-09 testing a real shipment: it was created successfully on
+-- Delhivery's side, but the order stayed stuck on "Pending").
+
+alter table public.orders drop constraint if exists orders_fulfillment_status_chk;
+alter table public.orders add constraint orders_fulfillment_status_chk
+  check (fulfillment_status in (
+    'Pending','Confirmed','Processing','Packed',
+    'Manifested','Shipped','Out For Delivery','Delivered',
+    'Attempt Failed','Returning','Returned','Cancelled'
+  ));
+
+
 -- ─────────────────── Phase 1a — structured shipping address ────────────────
 -- `shipping_address` stays as-is (the human-readable display string, e.g. on
 -- the packing slip). These are the same values the checkout form already
