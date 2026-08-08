@@ -18,11 +18,26 @@ export const orderItemSchema = z.object({
   quantity: z.number().int().positive().max(99),
 });
 
+// Structured delivery address — courier APIs need individual fields, not a
+// free-text block. Optional on the schema so older/other order-creation paths
+// (e.g. admin-created orders) don't break; checkout always sends it.
+export const shipAddressSchema = z.object({
+  name: z.string().min(1).max(160),
+  phone: z.string().min(6).max(20),
+  line1: z.string().min(1).max(300),
+  line2: z.string().max(300).optional().or(z.literal("")),
+  city: z.string().min(1).max(120),
+  state: z.string().min(1).max(120),
+  pincode: z.string().regex(/^[0-9]{4,10}$/, "Enter a valid postal code"),
+  country: z.string().max(80).optional(),
+});
+
 export const createOrderSchema = z.object({
   email: z.string().email("A valid email is required"),
   fullName: z.string().min(1).max(160).optional(),
   phone: z.string().max(40).optional(),
   shippingAddress: z.string().max(1000).optional(),
+  shipAddress: shipAddressSchema.optional(),
   paymentMethod: z.enum(["online", "cod"]).default("online"),
   code: z.string().max(40).optional(),
   items: z.array(orderItemSchema).min(1, "An order needs at least one item"),
@@ -105,6 +120,7 @@ export const razorpayVerifySchema = z.object({
   fullName: z.string().min(1).max(160).optional(),
   phone: z.string().max(40).optional(),
   shippingAddress: z.string().max(1000).optional(),
+  shipAddress: shipAddressSchema.optional(),
   items: z.array(orderItemSchema).min(1, "An order needs at least one item"),
   code: z.string().max(40).optional(),
   razorpayOrderId: z.string().min(1),
@@ -144,6 +160,15 @@ export const adminProductSchema = z.object({
   images: z
     .array(z.object({ src: z.string().url(), alt: z.string().max(200).optional().default("") }))
     .default([]),
+  // Shipping — needed for courier weight/volumetric-weight charges. Unset
+  // weight/dimensions just means the courier payload omits them (Delhivery
+  // accepts orders without exact dimensions); isShippable defaults true so
+  // existing products (all physical) don't need to be touched.
+  weightG: z.coerce.number().int().nonnegative().nullable().optional(),
+  lengthCm: z.coerce.number().nonnegative().nullable().optional(),
+  widthCm: z.coerce.number().nonnegative().nullable().optional(),
+  heightCm: z.coerce.number().nonnegative().nullable().optional(),
+  isShippable: z.boolean().default(true),
 });
 export type AdminProductInput = z.infer<typeof adminProductSchema>;
 

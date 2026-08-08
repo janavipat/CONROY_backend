@@ -69,11 +69,28 @@ export async function resolveCart(items: CartInput[]): Promise<ResolvedCart> {
  * separate update so the core insert never depends on the payment columns
  * existing — the flow keeps working even before payments.sql has been run.
  */
+/**
+ * Structured delivery address, as collected by the checkout form. Courier
+ * APIs (Delhivery) need these as individual fields — `shippingAddress` is
+ * kept purely as the human-readable display string, never reverse-parsed.
+ */
+export interface ShipAddress {
+  name: string;
+  phone: string;
+  line1: string;
+  line2?: string | null;
+  city: string;
+  state: string;
+  pincode: string;
+  country?: string;
+}
+
 export async function persistOrder(params: {
   email: string;
   fullName?: string | null;
   phone?: string | null;
   shippingAddress?: string | null;
+  shipAddress?: ShipAddress | null;
   status: string;
   cart: ResolvedCart;
   discount?: number;
@@ -122,6 +139,28 @@ export async function persistOrder(params: {
       .eq("id", order.id);
     if (payErr) {
       console.warn("Payment reference not stored (run payments.sql):", payErr.message);
+    }
+  }
+
+  // Best-effort: store the structured address. Ignored if shipping.sql not run
+  // — checkout must keep working even before the migration is applied.
+  if (params.shipAddress) {
+    const a = params.shipAddress;
+    const { error: shipErr } = await supabaseAdmin
+      .from("orders")
+      .update({
+        ship_name: a.name,
+        ship_phone: a.phone,
+        ship_line1: a.line1,
+        ship_line2: a.line2 || null,
+        ship_city: a.city,
+        ship_state: a.state,
+        ship_pincode: a.pincode,
+        ship_country: a.country || "India",
+      })
+      .eq("id", order.id);
+    if (shipErr) {
+      console.warn("Structured address not stored (run shipping.sql):", shipErr.message);
     }
   }
 

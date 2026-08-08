@@ -24,6 +24,7 @@ export async function createOrder(req: Request, res: Response) {
     fullName: input.fullName,
     phone: input.phone,
     shippingAddress: input.shippingAddress,
+    shipAddress: input.shipAddress,
     // COD orders await collection on delivery; online orders are paid.
     status: input.paymentMethod === "cod" ? "cod_pending" : "paid",
     cart,

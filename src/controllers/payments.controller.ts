@@ -82,6 +82,7 @@ export async function verifyPayment(req: Request, res: Response) {
     fullName: input.fullName,
     phone: input.phone,
     shippingAddress: input.shippingAddress,
+    shipAddress: input.shipAddress,
     status: "paid",
     cart,
     discount: offer.discount,

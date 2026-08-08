@@ -1,5 +1,12 @@
-import "dotenv/config";
+import dotenv from "dotenv";
 import { z } from "zod";
+
+// `.env` is committed (existing project convention). `.env.local` is
+// gitignored and, if present, overrides it — for secrets that must never
+// land in git history (e.g. the Delhivery API token: production-only,
+// server-side-only, never to be committed).
+dotenv.config();
+dotenv.config({ path: ".env.local", override: true });
 
 /** Validates and exposes a typed, fail-fast view of the environment. */
 const EnvSchema = z.object({
@@ -67,6 +74,15 @@ const EnvSchema = z.object({
 
   // Admin panel key. Required as `x-admin-key` on /api/admin/* when set.
   ADMIN_KEY: z.string().default(""),
+
+  // Delhivery (courier). Set only in .env.local (local dev) and the Vercel
+  // dashboard (production) — never in the committed .env. Unset → shipment
+  // creation is disabled; nothing else in the app depends on these.
+  DELHIVERY_API_URL: z.string().default(""),
+  DELHIVERY_API_TOKEN: z.string().default(""),
+  DELHIVERY_CLIENT_NAME: z.string().default(""),
+  DELHIVERY_PICKUP_LOCATION: z.string().default(""),
+  DELHIVERY_WEBHOOK_SECRET: z.string().default(""),
 });
 
 const parsed = EnvSchema.safeParse(process.env);

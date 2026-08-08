@@ -48,6 +48,28 @@ async function setInventoryFields(handle: string, sku: string, status: string): 
   if (error) console.warn("SKU/status not saved (run inventory.sql):", error.message);
 }
 
+/**
+ * Best-effort write of the shipping fields (weight/dimensions/is_shippable).
+ * Ignored if the columns don't exist yet — so product CRUD keeps working
+ * before shipping.sql has been run.
+ */
+async function setShippingFields(
+  handle: string,
+  input: { weightG?: number | null; lengthCm?: number | null; widthCm?: number | null; heightCm?: number | null; isShippable: boolean },
+): Promise<void> {
+  const { error } = await supabaseAdmin
+    .from("products")
+    .update({
+      weight_g: input.weightG ?? null,
+      length_cm: input.lengthCm ?? null,
+      width_cm: input.widthCm ?? null,
+      height_cm: input.heightCm ?? null,
+      is_shippable: input.isShippable,
+    })
+    .eq("handle", handle);
+  if (error) console.warn("Shipping fields not saved (run shipping.sql):", error.message);
+}
+
 /** POST /api/admin/upload — uploads an image to Supabase Storage, returns its URL. */
 export async function uploadImage(req: Request, res: Response) {
   const file = (req as Request & { file?: Express.Multer.File }).file;
@@ -89,6 +111,7 @@ export async function createProduct(req: Request, res: Response) {
 
   await setImages(handle, input.images);
   await setInventoryFields(handle, input.sku, input.status);
+  await setShippingFields(handle, input);
   res.status(201).json({ ok: true, message: "Product created.", data: { handle } });
 }
 
@@ -126,6 +149,7 @@ export async function updateProduct(req: Request, res: Response) {
 
   await setImages(existing.id as string, input.images);
   await setInventoryFields(handle, input.sku, input.status);
+  await setShippingFields(handle, input);
   res.json({ ok: true, message: "Product updated.", data: { handle } });
 }
 

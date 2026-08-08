@@ -39,6 +39,11 @@ function mapProduct(row: Record<string, unknown>) {
     rating: Number(row.rating),
     reviewCount: row.review_count,
     badge: row.badge ?? undefined,
+    weightG: row.weight_g ?? undefined,
+    lengthCm: row.length_cm ?? undefined,
+    widthCm: row.width_cm ?? undefined,
+    heightCm: row.height_cm ?? undefined,
+    isShippable: row.is_shippable ?? true,
     images,
   };
 }

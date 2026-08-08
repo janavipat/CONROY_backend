@@ -32,6 +32,13 @@ function mapProduct(row: Record<string, unknown>) {
     rating: Number(row.rating),
     reviewCount: row.review_count,
     badge: row.badge ?? undefined,
+    weightG: row.weight_g ?? undefined,
+    lengthCm: row.length_cm ?? undefined,
+    widthCm: row.width_cm ?? undefined,
+    heightCm: row.height_cm ?? undefined,
+    // Defaults true for rows written before shipping.sql (every existing
+    // product is a physical, shippable one).
+    isShippable: row.is_shippable ?? true,
     images,
   };
 }
