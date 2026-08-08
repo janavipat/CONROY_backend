@@ -1,4 +1,5 @@
 import { supabaseAdmin } from "./supabase.js";
+import { reverseGeocode } from "./reverseGeocode.js";
 
 /**
  * Live-visitor presence.
@@ -23,6 +24,12 @@ export interface VisitorPing {
   phone?: string;
   /** Approximate location resolved from the request IP at the edge. */
   geo?: EdgeGeo;
+  /**
+   * A browser GPS fix, sent only after the visitor consented. Takes precedence
+   * over the IP guess, which routinely reports the ISP's routing city rather
+   * than the visitor's town.
+   */
+  coords?: { latitude: number; longitude: number };
   /** Fallbacks used only when the edge gave us nothing. */
   tz?: string;
   locale?: string;
@@ -75,23 +82,55 @@ export async function recordPing(p: VisitorPing): Promise<void> {
   const hasEdge = Boolean(edge.countryCode || edge.city);
   const geo = hasEdge ? edge : fallbackGeo(p.locale, p.tz);
 
-  const { error } = await supabaseAdmin.from("live_visitors").upsert(
-    {
-      session_id: p.sessionId,
-      display_name: p.name ?? null,
-      phone: p.phone ?? null,
-      country_code: geo.countryCode ?? null,
-      country: geo.country ?? (geo.countryCode ? countryName(geo.countryCode) : null),
-      region: geo.region ?? null,
-      city: geo.city ?? null,
-      latitude: geo.latitude ?? null,
-      longitude: geo.longitude ?? null,
-      last_seen: new Date().toISOString(),
-    },
-    { onConflict: "session_id" },
-  );
+  const row: Record<string, unknown> = {
+    session_id: p.sessionId,
+    display_name: p.name ?? null,
+    phone: p.phone ?? null,
+    country_code: geo.countryCode ?? null,
+    country: geo.country ?? (geo.countryCode ? countryName(geo.countryCode) : null),
+    region: geo.region ?? null,
+    city: geo.city ?? null,
+    district: null,
+    latitude: geo.latitude ?? null,
+    longitude: geo.longitude ?? null,
+    precise: false,
+    last_seen: new Date().toISOString(),
+  };
+
+  // A consented GPS fix wins outright: resolve it to a place name and overwrite
+  // every geo field, so a stale IP guess can never leak through alongside it.
+  if (p.coords) {
+    row.latitude = p.coords.latitude;
+    row.longitude = p.coords.longitude;
+    row.precise = true;
+    const place = await reverseGeocode(p.coords.latitude, p.coords.longitude);
+    if (place) {
+      row.city = place.city ?? null;
+      row.district = place.district ?? null;
+      row.region = place.region ?? null;
+      row.country = place.country ?? null;
+      row.country_code = place.countryCode ?? null;
+    }
+  }
+
+  const { error } = await supabaseAdmin
+    .from("live_visitors")
+    .upsert(row, { onConflict: "session_id" });
 
   if (error) {
+    // Older databases lack district/precise — retry without them so presence
+    // still works before supabase/live-visitors-precise.sql is applied.
+    if (error.code === "42703" || error.code === "PGRST204") {
+      const { district: _d, precise: _p, ...legacy } = row;
+      void _d;
+      void _p;
+      const { error: retry } = await supabaseAdmin
+        .from("live_visitors")
+        .upsert(legacy, { onConflict: "session_id" });
+      if (retry) console.warn("live visitor not recorded:", retry.message);
+      else console.warn("live visitor: run supabase/live-visitors-precise.sql for precise location");
+      return;
+    }
     console.warn("live visitor not recorded (run supabase/live-visitors.sql):", error.message);
     return;
   }
@@ -119,6 +158,9 @@ export interface LiveVisitorRow {
   flag: string;
   region: string | null;
   city: string | null;
+  district: string | null;
+  /** true = browser GPS. false = approximate, from the request IP. */
+  precise: boolean;
   latitude: number | null;
   longitude: number | null;
   since: string;
@@ -168,6 +210,8 @@ export async function snapshot(): Promise<LiveSnapshot> {
       flag: flagFor(cc),
       region: (r.region as string | null) ?? null,
       city: (r.city as string | null) ?? null,
+      district: (r.district as string | null) ?? null,
+      precise: Boolean(r.precise),
       latitude: (r.latitude as number | null) ?? null,
       longitude: (r.longitude as number | null) ?? null,
       since: r.first_seen as string,

@@ -12,6 +12,9 @@ const pingSchema = z.object({
   path: z.string().max(300).optional(),
   name: z.string().max(120).optional(),
   phone: z.string().max(40).optional(),
+  // A consented browser GPS fix. Absent unless the visitor allowed it.
+  latitude: z.coerce.number().min(-90).max(90).optional(),
+  longitude: z.coerce.number().min(-180).max(180).optional(),
   tz: z.string().max(100).optional(),
   locale: z.string().max(35).optional(),
 });
@@ -73,6 +76,10 @@ export async function trackVisit(req: Request, res: Response) {
     name: ping.name,
     phone: ping.phone,
     geo: edgeGeo(req),
+    coords:
+      ping.latitude != null && ping.longitude != null
+        ? { latitude: ping.latitude, longitude: ping.longitude }
+        : undefined,
     tz: ping.tz,
     locale: ping.locale,
   });
