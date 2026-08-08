@@ -29,6 +29,9 @@ function mapProduct(row: Record<string, unknown>) {
     color: row.color,
     fit: row.fit,
     price: row.price,
+    // Matches the mapper in products.controller.ts — without this the collection
+    // grid silently drops the struck-through original price.
+    compareAtPrice: row.compare_at_price ?? undefined,
     currency: row.currency,
     sizes: row.sizes ?? [],
     details: row.details ?? [],
