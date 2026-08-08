@@ -17,6 +17,16 @@ interface ShipmentJobRow {
 }
 
 /**
+ * A job stuck in 'running' longer than this is assumed abandoned — the
+ * serverless function that claimed it almost certainly got frozen or killed
+ * mid-attempt (confirmed happening in practice 2026-08-09: an immediate-fire
+ * attempt left a job at state='running' forever, since only 'queued' jobs
+ * get reclaimed by anything). Comfortably above the 8s immediate-fire
+ * timeout and any plausible single Delhivery call.
+ */
+const STALE_RUNNING_MINUTES = 10;
+
+/**
  * Enqueues a "create" job for an order — best-effort, matching the pattern
  * used for every other post-migration column/table in this project. Called
  * right after an order is confirmed as paid/COD; never awaited by anything
@@ -76,6 +86,28 @@ async function failJob(job: ShipmentJobRow, message: string, permanent: boolean)
     .eq("id", job.id);
 }
 
+/**
+ * Resets jobs abandoned mid-attempt back into the normal backoff flow. Must
+ * run before claiming due jobs, so a reclaimed job's new next_run_at (~2 min
+ * out) has a chance to actually be picked up by a later pass.
+ */
+async function reclaimStaleJobs(): Promise<void> {
+  const cutoff = new Date(Date.now() - STALE_RUNNING_MINUTES * 60_000).toISOString();
+  const { data: stale } = await supabaseAdmin
+    .from("shipment_jobs")
+    .select("id, order_id, kind, state, attempts")
+    .eq("state", "running")
+    .lt("locked_at", cutoff);
+
+  for (const row of stale ?? []) {
+    await failJob(
+      row as ShipmentJobRow,
+      "Reclaimed: stuck in 'running' past the stale threshold (the process handling it was likely frozen/killed mid-attempt).",
+      false,
+    );
+  }
+}
+
 /** Claims and processes one job. Safe to call concurrently — see claimJob(). */
 async function processJob(jobId: string): Promise<void> {
   const job = await claimJob(jobId);
@@ -95,33 +127,48 @@ async function processJob(jobId: string): Promise<void> {
 }
 
 /**
- * Best-effort immediate attempt, fired right after enqueueing — NOT awaited
- * by the caller (checkout must never wait on Delhivery). On Vercel's Hobby
- * plan there's no frequent cron to fall back on, only a daily one, so this
- * is what makes shipments go out same-day in the common case rather than
- * within 24h. If the serverless function freezes before this finishes, the
- * job simply stays queued and the daily cron (runDueShipmentJobs) picks it
- * up — never lost, just slower.
+ * Bounded time budget for the immediate-fire attempt. A plain unawaited
+ * "fire and forget" was tried first and confirmed broken in practice
+ * (2026-08-09): Vercel froze the function right after the response was
+ * sent, cutting the attempt off mid-flight and leaving the job stuck in
+ * 'running' forever (see reclaimStaleJobs). Awaiting with a hard cap trades
+ * a small amount of checkout latency for the immediate attempt actually
+ * having a chance to finish — comfortably above Delhivery's observed
+ * response time (~1-2s) without risking a real hang.
  */
-export function fireShipmentJobNow(orderId: string): void {
-  void (async () => {
-    try {
-      const { data } = await supabaseAdmin
-        .from("shipment_jobs")
-        .select("id")
-        .eq("order_id", orderId)
-        .eq("kind", "create")
-        .eq("state", "queued")
-        .maybeSingle();
-      if (data) await processJob(data.id as string);
-    } catch (err) {
-      console.warn("Immediate shipment job attempt failed (cron will retry):", err);
-    }
-  })();
+const IMMEDIATE_FIRE_TIMEOUT_MS = 8_000;
+
+/**
+ * Tries to process an order's create job right away, awaited by the caller
+ * with a hard timeout — checkout still can't hang on a slow/down Delhivery,
+ * but the common case now actually completes instead of just hoping a
+ * background task survives. Falls back to the reclaim path + daily cron if
+ * it doesn't finish in time or the process dies anyway.
+ */
+export async function fireShipmentJobNow(orderId: string): Promise<void> {
+  try {
+    const { data } = await supabaseAdmin
+      .from("shipment_jobs")
+      .select("id")
+      .eq("order_id", orderId)
+      .eq("kind", "create")
+      .eq("state", "queued")
+      .maybeSingle();
+    if (!data) return;
+
+    await Promise.race([
+      processJob(data.id as string),
+      new Promise((resolve) => setTimeout(resolve, IMMEDIATE_FIRE_TIMEOUT_MS)),
+    ]);
+  } catch (err) {
+    console.warn("Immediate shipment job attempt failed (reclaim/cron will retry):", err);
+  }
 }
 
 /** Cron entrypoint — processes every job that's due, across all orders. */
 export async function runDueShipmentJobs(limit = 25): Promise<{ processed: number }> {
+  await reclaimStaleJobs();
+
   const { data: due } = await supabaseAdmin
     .from("shipment_jobs")
     .select("id")
