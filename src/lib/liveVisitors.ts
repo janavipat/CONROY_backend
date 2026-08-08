@@ -15,7 +15,13 @@ import { reverseGeocode } from "./reverseGeocode.js";
  * which page they are on, what they viewed, or how long they stayed.
  */
 
-const LIVE_TTL_MS = 75_000; // online if seen in the last 75s (≈3 missed beats)
+/**
+ * Online if seen within this window. The beacon beats every 25s, so 40s
+ * tolerates one dropped request but no more — a closed tab disappears in well
+ * under a minute instead of lingering for over one, which made the count read
+ * higher than the number of people actually on the site.
+ */
+const LIVE_TTL_MS = 40_000;
 
 export interface VisitorPing {
   sessionId: string;
