@@ -21,6 +21,17 @@ function mapProduct(row: Record<string, unknown>) {
     description: row.description,
     color: row.color,
     fit: row.fit,
+    // Taxonomy. Defaults match catalog-taxonomy.sql so rows written before it
+    // was applied still read as denim rather than blank.
+    productType: (row.product_type as string) ?? "Jeans",
+    category: (row.category as string) ?? "Denim",
+    standardColor: (row.standard_color as string) ?? undefined,
+    isNewIn: Boolean(row.is_new_in),
+    newInOrder: (row.new_in_order as number) ?? undefined,
+    isBestSeller: Boolean(row.is_best_seller),
+    bestSellerOrder: (row.best_seller_order as number) ?? undefined,
+    // Kept for "Newest" sorting. Deliberately NOT what drives New In.
+    createdAt: row.created_at ?? undefined,
     price: row.price,
     compareAtPrice: row.compare_at_price ?? undefined,
     currency: row.currency,

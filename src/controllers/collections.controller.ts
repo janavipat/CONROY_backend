@@ -32,6 +32,17 @@ function mapProduct(row: Record<string, unknown>) {
     // Matches the mapper in products.controller.ts — without this the collection
     // grid silently drops the struck-through original price.
     compareAtPrice: row.compare_at_price ?? undefined,
+    // Taxonomy — must stay in step with products.controller.ts. These two
+    // mappers have drifted before (compareAtPrice above); a field missing here
+    // disappears only on listing pages, which is easy to miss.
+    productType: (row.product_type as string) ?? "Jeans",
+    category: (row.category as string) ?? "Denim",
+    standardColor: (row.standard_color as string) ?? undefined,
+    isNewIn: Boolean(row.is_new_in),
+    newInOrder: (row.new_in_order as number) ?? undefined,
+    isBestSeller: Boolean(row.is_best_seller),
+    bestSellerOrder: (row.best_seller_order as number) ?? undefined,
+    createdAt: row.created_at ?? undefined,
     currency: row.currency,
     sizes: row.sizes ?? [],
     details: row.details ?? [],

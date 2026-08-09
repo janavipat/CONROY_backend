@@ -8,6 +8,35 @@ import {
   inventoryUpdateSchema,
 } from "../validators/schemas.js";
 
+/**
+ * Columns added by supabase/catalog-taxonomy.sql. Stripped from a write when
+ * the migration hasn't been applied yet, so saving a product keeps working on
+ * an un-migrated database instead of failing with a 500 — the admin form always
+ * sends these fields now, so without this, editing any product would break.
+ */
+const TAXONOMY_COLUMNS = [
+  "product_type",
+  "category",
+  "standard_color",
+  "is_new_in",
+  "new_in_order",
+  "is_best_seller",
+  "best_seller_order",
+] as const;
+
+/** True when the error means "that column doesn't exist". */
+function isMissingColumn(err: { code?: string; message?: string } | null): boolean {
+  if (!err) return false;
+  if (err.code === "42703" || err.code === "PGRST204") return true;
+  return TAXONOMY_COLUMNS.some((c) => err.message?.includes(c));
+}
+
+function withoutTaxonomy(row: Record<string, unknown>): Record<string, unknown> {
+  const out = { ...row };
+  for (const c of TAXONOMY_COLUMNS) delete out[c];
+  return out;
+}
+
 function slugify(value: string): string {
   return value
     .toLowerCase()
@@ -86,7 +115,7 @@ export async function createProduct(req: Request, res: Response) {
   const handle = input.handle?.trim() || slugify(input.title);
   if (!handle) throw new ApiError(400, "Could not derive a handle from the name.");
 
-  const { error: pErr } = await supabaseAdmin.from("products").insert({
+  const productRow: Record<string, unknown> = {
     id: handle,
     handle,
     title: input.title,
@@ -94,6 +123,13 @@ export async function createProduct(req: Request, res: Response) {
     description: input.description,
     color: input.color,
     fit: input.fit,
+    product_type: input.productType,
+    category: input.category,
+    standard_color: input.standardColor ?? null,
+    is_new_in: input.isNewIn,
+    new_in_order: input.newInOrder ?? null,
+    is_best_seller: input.isBestSeller,
+    best_seller_order: input.bestSellerOrder ?? null,
     price: input.price,
     compare_at_price: input.compareAtPrice ?? null,
     currency: input.currency,
@@ -103,7 +139,13 @@ export async function createProduct(req: Request, res: Response) {
     rating: 5,
     review_count: 0,
     badge: input.badge ?? null,
-  });
+  };
+
+  let { error: pErr } = await supabaseAdmin.from("products").insert(productRow);
+  if (isMissingColumn(pErr)) {
+    ({ error: pErr } = await supabaseAdmin.from("products").insert(withoutTaxonomy(productRow)));
+    if (!pErr) console.warn("product created without taxonomy — run supabase/catalog-taxonomy.sql");
+  }
   if (pErr) {
     if (pErr.code === "23505") throw new ApiError(409, "A product with this handle already exists.");
     throw new ApiError(500, pErr.message);
@@ -128,23 +170,39 @@ export async function updateProduct(req: Request, res: Response) {
   if (gErr) throw new ApiError(500, gErr.message);
   if (!existing) throw new ApiError(404, `Product not found: ${handle}`);
 
-  const { error: uErr } = await supabaseAdmin
+  const updateRow: Record<string, unknown> = {
+    title: input.title,
+    tagline: input.tagline,
+    description: input.description,
+    color: input.color,
+    fit: input.fit,
+    product_type: input.productType,
+    category: input.category,
+    standard_color: input.standardColor ?? null,
+    is_new_in: input.isNewIn,
+    new_in_order: input.newInOrder ?? null,
+    is_best_seller: input.isBestSeller,
+    best_seller_order: input.bestSellerOrder ?? null,
+    price: input.price,
+    compare_at_price: input.compareAtPrice ?? null,
+    currency: input.currency,
+    sizes: input.sizes,
+    details: input.details,
+    stock: input.stock,
+    badge: input.badge ?? null,
+  };
+
+  let { error: uErr } = await supabaseAdmin
     .from("products")
-    .update({
-      title: input.title,
-      tagline: input.tagline,
-      description: input.description,
-      color: input.color,
-      fit: input.fit,
-      price: input.price,
-      compare_at_price: input.compareAtPrice ?? null,
-      currency: input.currency,
-      sizes: input.sizes,
-      details: input.details,
-      stock: input.stock,
-      badge: input.badge ?? null,
-    })
+    .update(updateRow)
     .eq("handle", handle);
+  if (isMissingColumn(uErr)) {
+    ({ error: uErr } = await supabaseAdmin
+      .from("products")
+      .update(withoutTaxonomy(updateRow))
+      .eq("handle", handle));
+    if (!uErr) console.warn("product saved without taxonomy — run supabase/catalog-taxonomy.sql");
+  }
   if (uErr) throw new ApiError(500, uErr.message);
 
   await setImages(existing.id as string, input.images);

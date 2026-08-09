@@ -145,7 +145,23 @@ export const adminProductSchema = z.object({
   tagline: z.string().max(300).optional().default(""),
   description: z.string().max(4000).optional().default(""),
   color: z.string().max(40).default(""),
-  fit: z.string().min(1, "Type is required").max(60),
+  fit: z.string().min(1, "Fit is required").max(60),
+  // Taxonomy. Kept as free strings rather than enums on purpose: a CHECK or
+  // z.enum here would reject the two products whose fit is still the legacy
+  // "Vintage Collection", so an admin couldn't open and save them — and it
+  // would need another migration the first time a T-shirt fit is added. The
+  // admin form offers the correct options per category; this layer only
+  // guarantees the fields survive the round trip.
+  productType: z.string().max(60).default("Jeans"),
+  category: z.string().max(60).default("Denim"),
+  /** Filterable colour bucket. `color` remains the display name. */
+  standardColor: z.string().max(40).nullable().optional(),
+  // Merchandising rails — admin-controlled, never derived from created_at or
+  // sales volume.
+  isNewIn: z.boolean().default(false),
+  newInOrder: z.coerce.number().int().nonnegative().nullable().optional(),
+  isBestSeller: z.boolean().default(false),
+  bestSellerOrder: z.coerce.number().int().nonnegative().nullable().optional(),
   price: z.coerce.number().int().nonnegative("Price must be 0 or more"),
   // The struck-through "was" price (MRP). Null clears it; the column has always
   // existed and been read by the catalog API, it just had no way to be set.
