@@ -99,6 +99,77 @@ async function setShippingFields(
   if (error) console.warn("Shipping fields not saved (run shipping.sql):", error.message);
 }
 
+/**
+ * Replaces a product's collection membership with the provided handles.
+ *
+ * Only rows for THIS product are touched, so a collection's other members and
+ * their ordering are left exactly as the Collections page left them. New links
+ * are appended at the end of their collection (position = current max + 1)
+ * rather than at 0, which would reshuffle a curated collection.
+ *
+ * "all" is skipped — it's derived, never a stored link (see getCollection).
+ * Best-effort: a missing collection_products table only warns, matching how the
+ * SKU/shipping writes degrade on an un-migrated database.
+ */
+async function setProductCollections(handle: string, collections: string[]): Promise<void> {
+  const wanted = [...new Set(collections.map((c) => c.trim()).filter((c) => c && c !== "all"))];
+
+  const { data: current, error: readErr } = await supabaseAdmin
+    .from("collection_products")
+    .select("collection_handle")
+    .eq("product_handle", handle);
+  if (readErr) {
+    console.warn("Collections not saved (collection_products unavailable):", readErr.message);
+    return;
+  }
+
+  const existing = new Set((current ?? []).map((r) => r.collection_handle as string));
+  const toAdd = wanted.filter((c) => !existing.has(c));
+  const toRemove = [...existing].filter((c) => !wanted.includes(c));
+
+  if (toRemove.length) {
+    const { error } = await supabaseAdmin
+      .from("collection_products")
+      .delete()
+      .eq("product_handle", handle)
+      .in("collection_handle", toRemove);
+    if (error) throw new ApiError(500, error.message);
+  }
+
+  if (toAdd.length) {
+    // One tail position per collection being joined.
+    const { data: tails } = await supabaseAdmin
+      .from("collection_products")
+      .select("collection_handle, position")
+      .in("collection_handle", toAdd);
+    const nextPos = new Map<string, number>();
+    for (const row of tails ?? []) {
+      const key = row.collection_handle as string;
+      nextPos.set(key, Math.max(nextPos.get(key) ?? 0, ((row.position as number) ?? 0) + 1));
+    }
+
+    const { error } = await supabaseAdmin.from("collection_products").insert(
+      toAdd.map((c) => ({
+        collection_handle: c,
+        product_handle: handle,
+        position: nextPos.get(c) ?? 0,
+      })),
+    );
+    if (error) throw new ApiError(500, error.message);
+  }
+}
+
+/** GET /api/admin/products/:handle/collections — the product's collection handles. */
+export async function getProductCollections(req: Request, res: Response) {
+  const { handle } = req.params;
+  const { data, error } = await supabaseAdmin
+    .from("collection_products")
+    .select("collection_handle")
+    .eq("product_handle", handle);
+  if (error) throw new ApiError(500, error.message);
+  res.json({ ok: true, data: (data ?? []).map((r) => r.collection_handle as string) });
+}
+
 /** POST /api/admin/upload — uploads an image to Supabase Storage, returns its URL. */
 export async function uploadImage(req: Request, res: Response) {
   const file = (req as Request & { file?: Express.Multer.File }).file;
@@ -154,6 +225,7 @@ export async function createProduct(req: Request, res: Response) {
   await setImages(handle, input.images);
   await setInventoryFields(handle, input.sku, input.status);
   await setShippingFields(handle, input);
+  if (input.collections) await setProductCollections(handle, input.collections);
   res.status(201).json({ ok: true, message: "Product created.", data: { handle } });
 }
 
@@ -208,6 +280,7 @@ export async function updateProduct(req: Request, res: Response) {
   await setImages(existing.id as string, input.images);
   await setInventoryFields(handle, input.sku, input.status);
   await setShippingFields(handle, input);
+  if (input.collections) await setProductCollections(handle, input.collections);
   res.json({ ok: true, message: "Product updated.", data: { handle } });
 }
 

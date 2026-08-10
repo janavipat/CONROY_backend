@@ -66,6 +66,7 @@ import {
 import {
   createProduct,
   deleteProduct,
+  getProductCollections,
   getStats,
   listAllOrders,
   getAdminOrder,
@@ -180,6 +181,9 @@ router.post("/admin/upload", upload.single("file"), asyncHandler(uploadImage));
 router.post("/admin/products", asyncHandler(createProduct));
 router.put("/admin/products/:handle", asyncHandler(updateProduct));
 router.delete("/admin/products/:handle", asyncHandler(deleteProduct));
+// Which collections a product belongs to — read by the product form so it can
+// prefill its Collections checkboxes (writes go through the product payload).
+router.get("/admin/products/:handle/collections", asyncHandler(getProductCollections));
 // Inventory
 router.get("/admin/inventory", asyncHandler(listInventory));
 router.patch("/admin/inventory/:handle", asyncHandler(updateInventory));

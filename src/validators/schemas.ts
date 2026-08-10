@@ -171,6 +171,11 @@ export const adminProductSchema = z.object({
   sku: z.string().max(80).optional().default(""),
   status: z.enum(["active", "draft", "archived"]).default("active"),
   sizes: z.array(z.string().max(12)).default([]),
+  // Collection membership, chosen by the admin on the product form. Optional
+  // on purpose: `undefined` means "leave membership alone", so a caller that
+  // doesn't know about collections can't wipe a product out of them. An empty
+  // array does clear them — that's the admin unticking every box.
+  collections: z.array(z.string().min(1).max(160)).optional(),
   details: z.array(z.string().max(300)).default([]),
   badge: z.string().max(40).nullable().optional(),
   images: z
