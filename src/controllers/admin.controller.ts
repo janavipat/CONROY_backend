@@ -45,6 +45,18 @@ function slugify(value: string): string {
     .replace(/^-+|-+$/g, "");
 }
 
+/**
+ * Rounds to a whole number of rupees, never below zero.
+ *
+ * No product field is required, so price can arrive missing, empty or as a
+ * float. `price` is `integer not null check (price >= 0)`, so clamping here is
+ * what keeps a partial product saveable instead of failing at the database.
+ */
+function safePrice(value: number | null | undefined): number {
+  const n = Number(value);
+  return Number.isFinite(n) ? Math.max(0, Math.round(n)) : 0;
+}
+
 /** Replaces a product's images with the provided list. */
 async function setImages(
   productId: string,
@@ -183,8 +195,11 @@ export async function uploadImage(req: Request, res: Response) {
 /** POST /api/admin/products — creates a product. */
 export async function createProduct(req: Request, res: Response) {
   const input = adminProductSchema.parse(req.body);
-  const handle = input.handle?.trim() || slugify(input.title);
-  if (!handle) throw new ApiError(400, "Could not derive a handle from the name.");
+  // A product with no name still needs a handle — it's the primary key. Falling
+  // back to a generated one keeps an untitled draft saveable; the admin can set
+  // a real name later without the handle ever being empty or colliding.
+  const handle =
+    input.handle?.trim() || slugify(input.title) || `product-${Date.now().toString(36)}`;
 
   const productRow: Record<string, unknown> = {
     id: handle,
@@ -201,8 +216,8 @@ export async function createProduct(req: Request, res: Response) {
     new_in_order: input.newInOrder ?? null,
     is_best_seller: input.isBestSeller,
     best_seller_order: input.bestSellerOrder ?? null,
-    price: input.price,
-    compare_at_price: input.compareAtPrice ?? null,
+    price: safePrice(input.price),
+    compare_at_price: input.compareAtPrice == null ? null : safePrice(input.compareAtPrice),
     currency: input.currency,
     sizes: input.sizes,
     details: input.details,
@@ -255,8 +270,8 @@ export async function updateProduct(req: Request, res: Response) {
     new_in_order: input.newInOrder ?? null,
     is_best_seller: input.isBestSeller,
     best_seller_order: input.bestSellerOrder ?? null,
-    price: input.price,
-    compare_at_price: input.compareAtPrice ?? null,
+    price: safePrice(input.price),
+    compare_at_price: input.compareAtPrice == null ? null : safePrice(input.compareAtPrice),
     currency: input.currency,
     sizes: input.sizes,
     details: input.details,

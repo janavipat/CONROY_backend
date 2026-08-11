@@ -139,13 +139,17 @@ export const reviewSchema = z.object({
 export type ReviewInput = z.infer<typeof reviewSchema>;
 
 // Admin: create / update a product. Images are URLs (already uploaded to storage).
+// No field here is required: an admin can save a partial product and fill the
+// rest in later. The columns behind them are still NOT NULL, so the defaults
+// are empty strings and 0 rather than null — see the controller, which clamps
+// price and derives a handle when there's no title to slugify.
 export const adminProductSchema = z.object({
-  title: z.string().min(1, "Name is required").max(160),
+  title: z.string().max(160).optional().default(""),
   handle: z.string().max(160).optional(),
   tagline: z.string().max(300).optional().default(""),
   description: z.string().max(4000).optional().default(""),
   color: z.string().max(40).default(""),
-  fit: z.string().min(1, "Fit is required").max(60),
+  fit: z.string().max(60).optional().default(""),
   // Taxonomy. Kept as free strings rather than enums on purpose: a CHECK or
   // z.enum here would reject the two products whose fit is still the legacy
   // "Vintage Collection", so an admin couldn't open and save them — and it
@@ -162,10 +166,13 @@ export const adminProductSchema = z.object({
   newInOrder: z.coerce.number().int().nonnegative().nullable().optional(),
   isBestSeller: z.boolean().default(false),
   bestSellerOrder: z.coerce.number().int().nonnegative().nullable().optional(),
-  price: z.coerce.number().int().nonnegative("Price must be 0 or more"),
+  // Accepts missing, null, "" or a float — anything the form can produce. The
+  // controller rounds and clamps to >= 0 so the price CHECK constraint can't be
+  // violated by a value that got this far.
+  price: z.coerce.number().optional().default(0),
   // The struck-through "was" price (MRP). Null clears it; the column has always
   // existed and been read by the catalog API, it just had no way to be set.
-  compareAtPrice: z.coerce.number().int().nonnegative().nullable().optional(),
+  compareAtPrice: z.coerce.number().nullable().optional(),
   currency: z.string().max(8).default("INR"),
   stock: z.coerce.number().int().nonnegative().default(0),
   sku: z.string().max(80).optional().default(""),
