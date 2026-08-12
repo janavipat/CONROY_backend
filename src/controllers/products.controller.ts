@@ -1,6 +1,7 @@
 import type { Request, Response } from "express";
 import { supabaseAdmin } from "../lib/supabase.js";
 import { ApiError } from "../middleware/errors.js";
+import { discountPercent } from "../lib/pricing.js";
 
 const PRODUCT_SELECT = "*, images:product_images(src, alt, position)";
 
@@ -34,6 +35,9 @@ function mapProduct(row: Record<string, unknown>) {
     createdAt: row.created_at ?? undefined,
     price: row.price,
     compareAtPrice: row.compare_at_price ?? undefined,
+    // Derived, never stored: the saving as a whole percent, or absent when
+    // there is no real discount to advertise.
+    discountPercent: discountPercent(row.price, row.compare_at_price),
     currency: row.currency,
     sizes: row.sizes ?? [],
     details: row.details ?? [],

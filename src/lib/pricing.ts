@@ -2,6 +2,29 @@ import { supabaseAdmin } from "./supabase.js";
 import { ApiError } from "../middleware/errors.js";
 import { enqueueCreateShipmentJob, fireShipmentJobNow } from "../services/shipping/jobs.js";
 
+/**
+ * The saving on a product, as a whole percentage of its original price.
+ *
+ * Lives here rather than in a template so every surface — product grids, the
+ * PDP, quick view, search — shows the same figure derived from the same two
+ * numbers, and a change to how CONROY expresses a discount happens once.
+ *
+ * Returns undefined unless there is a real saving: no MRP, an MRP at or below
+ * the selling price, or anything non-finite yields no badge rather than "0%
+ * Off" or a negative.
+ */
+export function discountPercent(
+  price: unknown,
+  compareAtPrice: unknown,
+): number | undefined {
+  const now = Number(price);
+  const was = Number(compareAtPrice);
+  if (!Number.isFinite(now) || !Number.isFinite(was)) return undefined;
+  if (was <= 0 || was <= now) return undefined;
+  const pct = Math.round(((was - now) / was) * 100);
+  return pct > 0 ? pct : undefined;
+}
+
 export interface OrderLineItem {
   product_handle: string;
   title: string;
