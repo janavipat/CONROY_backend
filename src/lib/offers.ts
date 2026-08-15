@@ -29,6 +29,90 @@ export interface DiscountResult {
   message: string;
   /** The coupon code that was actually applied (persisted on the order). */
   code: string | null;
+  /**
+   * The campaign tier reached, when the standing offer is what applied.
+   * `units` is what is actually in the cart; `minUnits` is the threshold that
+   * earned the tier, so a three-item cart still reads "Buy 2 → 50% off".
+   */
+  tier: { percent: number; units: number; minUnits: number } | null;
+  /** The next tier still within reach, so the cart can say what unlocks it. */
+  nextTier: { unitsNeeded: number; percent: number } | null;
+}
+
+/**
+ * The standing CONROY promotion — the one advertised in the welcome popup and
+ * the homepage strip.
+ *
+ * It lives here, beside the admin offers, because this module is the single
+ * place any discount is decided: the cart quote, COD checkout, the Razorpay
+ * order amount and the post-payment verification all call computeDiscount, so
+ * defining the tiers here is what keeps the advertised offer, the charged
+ * amount and the saved order the same number.
+ *
+ * It is not a row in `offers` on purpose. That table models one discount at a
+ * time — a percentage or a flat amount, optionally behind a code or a minimum
+ * — and has no column for "the second one is cheaper". Adding a tiered type
+ * would need a migration and admin UI for a promotion that is a brand-level
+ * constant, so it is expressed as one instead. Editing these tiers changes the
+ * offer everywhere, including what customers are charged.
+ *
+ * Tiers are ordered richest first; the first one whose threshold is met wins.
+ */
+export const CONROY_CAMPAIGN = {
+  title: "CONROY Offer",
+  tiers: [
+    { minUnits: 2, percent: 50 },
+    { minUnits: 1, percent: 30 },
+  ],
+} as const;
+
+/**
+ * Which cart lines the campaign applies to.
+ *
+ * Every product today — it is a store-wide promotion. It exists as a function
+ * so narrowing it later (a category, a collection, excluding sale stock) is one
+ * edit here rather than a hunt through the checkout.
+ */
+function isEligible(_line: CartLine): boolean {
+  return true;
+}
+
+/**
+ * The standing campaign's discount for a cart.
+ *
+ * "Units" is total quantity across eligible lines, not the number of distinct
+ * products: two of the same jean unlocks the second tier exactly as two
+ * different ones do, which is what the cart's quantity stepper implies.
+ */
+function campaignDiscount(lines: CartLine[]): {
+  discount: number;
+  percent: number;
+  units: number;
+  /** The threshold that earned the tier — what "Buy N" refers to. */
+  minUnits: number;
+  nextTier: { unitsNeeded: number; percent: number } | null;
+} {
+  const eligible = lines.filter(isEligible);
+  const units = eligible.reduce((n, l) => n + l.quantity, 0);
+  const base = eligible.reduce((s, l) => s + l.price * l.quantity, 0);
+
+  const tier = CONROY_CAMPAIGN.tiers.find((t) => units >= t.minUnits) ?? null;
+  // The cheapest tier above the one reached — what "add one more" would buy.
+  const better = [...CONROY_CAMPAIGN.tiers]
+    .sort((a, b) => a.minUnits - b.minUnits)
+    .find((t) => t.minUnits > units);
+
+  const percent = tier?.percent ?? 0;
+  // Whole rupees, and never more than the base it comes off.
+  const discount = Math.max(0, Math.min(base, Math.round((base * percent) / 100)));
+
+  return {
+    discount,
+    percent,
+    units,
+    minUnits: tier?.minUnits ?? 0,
+    nextTier: better ? { unitsNeeded: better.minUnits - units, percent: better.percent } : null,
+  };
 }
 
 /** The single active offer (only one may be active at a time). Null if none / table missing. */
@@ -57,6 +141,42 @@ export async function computeDiscount(
   subtotal: number,
   code?: string | null,
 ): Promise<DiscountResult> {
+  const admin = await adminOfferDiscount(lines, subtotal, code);
+
+  // An offer the shop has deliberately switched on takes precedence; the
+  // standing campaign is the floor everyone gets when none is running. Only
+  // one ever applies, so nothing can be discounted twice.
+  if (admin.discount > 0) return admin;
+
+  const camp = campaignDiscount(lines);
+  return {
+    discount: camp.discount,
+    total: Math.max(0, subtotal - camp.discount),
+    offer:
+      camp.discount > 0
+        ? // Reported as an all-products offer because that is what it is, and
+          // it keeps the public shape unchanged for existing callers. The
+          // tier fields below carry what is campaign-specific.
+          { id: "conroy-campaign", title: CONROY_CAMPAIGN.title, type: "all_products" }
+        : null,
+    applied: camp.discount > 0,
+    // A coupon offer that wasn't unlocked still says so, so the checkout can
+    // keep prompting for the code even while the campaign is applied.
+    requiresCode: admin.requiresCode,
+    message: camp.discount > 0 ? `${camp.percent}% off your order.` : admin.message,
+    code: null,
+    tier:
+      camp.percent > 0 ? { percent: camp.percent, units: camp.units, minUnits: camp.minUnits } : null,
+    nextTier: camp.nextTier,
+  };
+}
+
+/** The admin-configured offer, if one is active and its conditions are met. */
+async function adminOfferDiscount(
+  lines: CartLine[],
+  subtotal: number,
+  code?: string | null,
+): Promise<DiscountResult> {
   const none: DiscountResult = {
     discount: 0,
     total: subtotal,
@@ -65,6 +185,8 @@ export async function computeDiscount(
     requiresCode: false,
     message: "",
     code: null,
+    tier: null,
+    nextTier: null,
   };
 
   // Staging with a flat price override: a live "₹200 off" offer applied to a ₹1
@@ -90,6 +212,8 @@ export async function computeDiscount(
     requiresCode: false,
     message,
     code: appliedCode,
+    tier: null,
+    nextTier: null,
   });
 
   switch (offer.type) {

@@ -375,15 +375,18 @@ export async function listCustomers(_req: Request, res: Response) {
     .order("created_at", { ascending: false });
   if (error) throw new ApiError(500, error.message);
 
-  // Aggregate orders per customer phone.
-  const { data: orders } = await supabaseAdmin.from("orders").select("phone, subtotal");
+  // Aggregate orders per customer phone. Spend is net of the offer discount —
+  // what the customer actually paid — matching how the Accounts page totals
+  // revenue. Summing the gross subtotal here would overstate every buyer by
+  // whatever the promotion took off.
+  const { data: orders } = await supabaseAdmin.from("orders").select("phone, subtotal, discount");
   const stats = new Map<string, { count: number; spent: number }>();
   for (const o of orders ?? []) {
     const key = o.phone as string | null;
     if (!key) continue;
     const cur = stats.get(key) ?? { count: 0, spent: 0 };
     cur.count += 1;
-    cur.spent += (o.subtotal as number) ?? 0;
+    cur.spent += ((o.subtotal as number) ?? 0) - ((o.discount as number) ?? 0);
     stats.set(key, cur);
   }
 
