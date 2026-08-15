@@ -1,4 +1,5 @@
 import { supabaseAdmin } from "./supabase.js";
+import { stagingPriceOverride } from "../config/staging.js";
 
 export interface OfferRow {
   id: string;
@@ -65,6 +66,12 @@ export async function computeDiscount(
     message: "",
     code: null,
   };
+
+  // Staging with a flat price override: a live "₹200 off" offer applied to a ₹1
+  // cart leaves a payable of ₹0, which Razorpay rejects outright — so the test
+  // order would fail at the one step the client is here to try. The override is
+  // already the test discount; stacking a second one on top buys nothing.
+  if (stagingPriceOverride() !== null) return none;
 
   const offer = await getActiveOffer();
   if (!offer) return none;

@@ -1,5 +1,12 @@
 import dotenv from "dotenv";
 import { z } from "zod";
+import {
+  appEnv,
+  isStaging,
+  stagingPriceOverride,
+  assertNotProductionDatabase,
+  assertNotLivePaymentKeys,
+} from "./staging.js";
 
 // `.env` is committed (existing project convention). `.env.local` is
 // gitignored and, if present, overrides it — for secrets that must never
@@ -129,6 +136,21 @@ if (!parsed.data.ADMIN_KEY) {
   console.warn("⚠️  ADMIN_KEY is not set — the /admin API is OPEN. Set it before deploying.\n");
 }
 
+// Guardrails for this branch. The database check runs whatever APP_ENV says,
+// because a build of the staging branch is never the production deployment;
+// the payment-key check only bites once the environment declares itself staging.
+if (supabaseConfigured) assertNotProductionDatabase(parsed.data.SUPABASE_URL);
+assertNotLivePaymentKeys(parsed.data.RAZORPAY_KEY_ID);
+
+if (isStaging()) {
+  const override = stagingPriceOverride();
+  console.warn(
+    `🧪 STAGING build — APP_ENV=staging.\n` +
+      `   Database: ${parsed.data.SUPABASE_URL || "(unset)"}\n` +
+      `   Price override: ${override === null ? "off (catalogue prices)" : `₹${override} per unit`}\n`,
+  );
+}
+
 export const env = {
   ...parsed.data,
   // Fall back to harmless placeholders so the Supabase client can be created
@@ -139,6 +161,11 @@ export const env = {
   supabaseConfigured,
   corsOrigins: parsed.data.CORS_ORIGINS.split(",").map((s) => s.trim()).filter(Boolean),
   isProd: parsed.data.NODE_ENV === "production",
+  // Which environment this deployment *is* — distinct from NODE_ENV, which is
+  // about how the code is built and is "production" on the staging host too.
+  appEnv: appEnv(),
+  isStaging: isStaging(),
+  stagingPriceOverride: stagingPriceOverride(),
   // OTP is sent either directly via Twilio (TWILIO_* set) or by Supabase phone
   // auth. Force mock OTP unless a real provider is configured, or OTP_MOCK≠false.
   otpMock: parsed.data.OTP_MOCK !== "false" || !realOtpProvider,

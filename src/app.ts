@@ -46,8 +46,31 @@ export function createApp() {
     }),
   );
 
-  // Health check
-  app.get("/health", (_req, res) => res.json({ ok: true, service: "conroy-backend" }));
+  // Health check. Reports which environment this deployment believes it is and,
+  // in staging, which database and price it is running with — enough to tell a
+  // correctly wired staging API from a misconfigured one without reading logs.
+  // The Supabase *ref* is public (it ships in the frontend bundle); no key is
+  // exposed, and nothing extra is reported on a production deployment.
+  app.get("/health", (_req, res) =>
+    res.json({
+      ok: true,
+      service: "conroy-backend",
+      env: env.appEnv,
+      ...(env.isStaging
+        ? {
+            staging: {
+              supabaseRef: env.SUPABASE_URL.replace(/^https?:\/\//, "").split(".")[0],
+              priceOverrideInr: env.stagingPriceOverride,
+              razorpayMode: env.RAZORPAY_KEY_ID.startsWith("rzp_test_")
+                ? "test"
+                : env.RAZORPAY_KEY_ID
+                  ? "unknown"
+                  : "demo",
+            },
+          }
+        : {}),
+    }),
+  );
 
   app.use("/api", router);
 

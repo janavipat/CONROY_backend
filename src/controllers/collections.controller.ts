@@ -3,6 +3,7 @@ import { supabaseAdmin } from "../lib/supabase.js";
 import { ApiError } from "../middleware/errors.js";
 import { adminCollectionSchema, collectionProductsSchema } from "../validators/schemas.js";
 import { discountPercent } from "../lib/pricing.js";
+import { priceFor, compareAtPriceFor } from "../config/staging.js";
 
 function slugify(value: string): string {
   return value
@@ -29,11 +30,12 @@ function mapProduct(row: Record<string, unknown>) {
     description: row.description,
     color: row.color,
     fit: row.fit,
-    price: row.price,
+    // Staging price override — see products.controller.ts. Identity in production.
+    price: priceFor(row.price),
     // Matches the mapper in products.controller.ts — without this the collection
     // grid silently drops the struck-through original price.
-    compareAtPrice: row.compare_at_price ?? undefined,
-    discountPercent: discountPercent(row.price, row.compare_at_price),
+    compareAtPrice: compareAtPriceFor(row.compare_at_price) ?? undefined,
+    discountPercent: discountPercent(priceFor(row.price), compareAtPriceFor(row.compare_at_price)),
     // Taxonomy — must stay in step with products.controller.ts. These two
     // mappers have drifted before (compareAtPrice above); a field missing here
     // disappears only on listing pages, which is easy to miss.

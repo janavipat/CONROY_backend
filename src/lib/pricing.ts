@@ -1,6 +1,7 @@
 import { supabaseAdmin } from "./supabase.js";
 import { ApiError } from "../middleware/errors.js";
 import { enqueueCreateShipmentJob, fireShipmentJobNow } from "../services/shipping/jobs.js";
+import { stagingPriceOverride } from "../config/staging.js";
 
 /**
  * The saving on a product, as a whole percentage of its original price.
@@ -62,6 +63,10 @@ export async function resolveCart(items: CartInput[]): Promise<ResolvedCart> {
 
   const byHandle = new Map((products ?? []).map((p) => [p.handle as string, p]));
 
+  // Staging only: one flat price per unit, so the client can walk the real
+  // Razorpay checkout for ₹1. Null in production, where the DB price stands.
+  const override = stagingPriceOverride();
+
   const lineItems: OrderLineItem[] = items.map((item) => {
     const product = byHandle.get(item.productHandle);
     if (!product) throw new ApiError(400, `Unknown product: ${item.productHandle}`);
@@ -73,7 +78,7 @@ export async function resolveCart(items: CartInput[]): Promise<ResolvedCart> {
       title: product.title as string,
       size: item.size,
       fit: product.fit as string,
-      price: product.price as number,
+      price: override ?? (product.price as number),
       quantity: item.quantity,
     };
   });
