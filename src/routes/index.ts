@@ -56,9 +56,9 @@ import {
   updateOffer,
 } from "../controllers/offers.controller.js";
 import {
-  login,
+  // login, register — commented out alongside their controller functions
+  // (email + password auth, superseded by phone OTP).
   me,
-  register,
   startPhoneOtp,
   verifyPhoneOtp,
   updateProfileName,
@@ -159,9 +159,9 @@ router.get("/offers/active", asyncHandler(getActiveOfferPublic));
 // Offers — public: preview/apply the active offer to a cart (+ optional code)
 router.post("/offers/apply", asyncHandler(applyOffer));
 
-// Auth (Supabase Auth)
-router.post("/auth/register", asyncHandler(register));
-router.post("/auth/login", asyncHandler(login));
+// Auth — email + password, commented out in favor of phone OTP below.
+// router.post("/auth/register", asyncHandler(register));
+// router.post("/auth/login", asyncHandler(login));
 router.get("/auth/me", asyncHandler(me));
 
 // Phone OTP login

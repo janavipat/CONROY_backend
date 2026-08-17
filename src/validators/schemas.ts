@@ -247,53 +247,45 @@ export const loginSchema = z.object({
 });
 
 // Phone OTP — accepts a 10-digit local number or a full E.164 (+CC…) number.
-// Sign-in is by EMAIL for now (phone-based sign-in is commented out below,
-// in auth.controller.ts — re-enable by requiring `phone` again there and
-// dropping the email-lookup branch). Sign-up still needs a phone number:
-// that's the account's identity, unchanged.
+// `phone` is required for both signin and signup again — phone (via
+// WhatsApp) is the authentication method. `email` stays as an optional field
+// (used only for the welcome email on signup, unrelated to auth) rather than
+// being removed, in case anything still passes it through.
+//
+// Email-only sign-in (phone optional, email required) is commented out —
+// see the superRefine below and auth.controller.ts's startPhoneOtp/
+// verifyPhoneOtp for the matching change. Restore both together.
 const phoneField = z
   .string()
   .trim()
-  .regex(/^\+?[0-9\s-]{8,16}$/, "Enter a valid phone number")
-  .optional()
-  .or(z.literal(""));
+  .regex(/^\+?[0-9\s-]{8,16}$/, "Enter a valid phone number");
 const emailField = z.string().email().optional().or(z.literal(""));
 
-export const phoneStartSchema = z
-  .object({
-    phone: phoneField,
-    // "signin" (must already have an account) or "signup" (must be a new number).
-    mode: z.enum(["signin", "signup"]).default("signin"),
-    email: emailField,
-  })
-  .superRefine((v, ctx) => {
-    if (v.mode === "signup" && !v.phone) {
-      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["phone"], message: "Enter a valid phone number" });
-    }
-    if (v.mode === "signin" && !v.email) {
-      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["email"], message: "Enter your email to sign in" });
-    }
-  });
-
-export const phoneVerifySchema = z
-  .object({
-    phone: phoneField,
-    code: z.string().trim().regex(/^[0-9]{4,8}$/, "Enter the code sent to your phone"),
-    mode: z.enum(["signin", "signup"]).default("signin"),
-    // Full name is required to create an account (signup).
-    fullName: z.string().trim().min(1).max(120).optional(),
-    // Email: required for signup (destination for the code) and for signin
-    // (the identifier the customer signed in with).
-    email: emailField,
-  })
-  .superRefine((v, ctx) => {
-    if (v.mode === "signup" && !v.phone) {
-      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["phone"], message: "Enter a valid phone number" });
-    }
-    if (v.mode === "signin" && !v.email) {
-      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["email"], message: "Enter your email to sign in" });
-    }
+export const phoneStartSchema = z.object({
+  phone: phoneField,
+  // "signin" (must already have an account) or "signup" (must be a new number).
+  mode: z.enum(["signin", "signup"]).default("signin"),
+  email: emailField,
 });
+// .superRefine((v, ctx) => {
+//   if (v.mode === "signin" && !v.email) {
+//     ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["email"], message: "Enter your email to sign in" });
+//   }
+// });
+
+export const phoneVerifySchema = z.object({
+  phone: phoneField,
+  code: z.string().trim().regex(/^[0-9]{4,8}$/, "Enter the code sent to your phone"),
+  mode: z.enum(["signin", "signup"]).default("signin"),
+  // Full name is required to create an account (signup).
+  fullName: z.string().trim().min(1).max(120).optional(),
+  email: emailField,
+});
+// .superRefine((v, ctx) => {
+//   if (v.mode === "signin" && !v.email) {
+//     ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["email"], message: "Enter your email to sign in" });
+//   }
+// });
 
 // Update the signed-in customer's display name.
 export const updateNameSchema = z.object({
