@@ -12,6 +12,7 @@
     "build": "tsc -p tsconfig.json",
     "start": "node dist/src/index.js",
     "seed": "tsx scripts/seed.ts",
+    "seed:reviews": "tsx scripts/seed-reviews.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
