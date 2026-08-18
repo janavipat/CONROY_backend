@@ -12,16 +12,32 @@ function slugify(value: string): string {
     .replace(/^-+|-+$/g, "");
 }
 
-const PRODUCT_SELECT = "*, images:product_images(src, alt, position)";
+/**
+ * Mirrors PRODUCT_SELECT in products.controller — the two mappers have drifted
+ * before, so a change to one belongs in both. The collection join is what lets
+ * the storefront filter a listing by collection; without it these routes
+ * returned products with no collections at all while /api/products did.
+ */
+const PRODUCT_SELECT =
+  "*, images:product_images(src, alt, position), collections:collection_products(collection_handle)";
 
 type ImageRow = { src: string; alt: string; position: number };
+type CollectionRow = { collection_handle: string };
 
 function mapProduct(row: Record<string, unknown>) {
   const images = ((row.images as ImageRow[]) ?? [])
     .slice()
     .sort((a, b) => a.position - b.position)
     .map(({ src, alt }) => ({ src, alt }));
+
+  // "all" holds every product, so as a filter option it would never narrow
+  // anything.
+  const collections = ((row.collections as CollectionRow[]) ?? [])
+    .map((c) => c.collection_handle)
+    .filter((h) => h && h !== "all");
+
   return {
+    collections,
     id: row.id,
     handle: row.handle,
     title: row.title,

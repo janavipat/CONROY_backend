@@ -3,9 +3,21 @@ import { supabaseAdmin } from "../lib/supabase.js";
 import { ApiError } from "../middleware/errors.js";
 import { discountPercent } from "../lib/pricing.js";
 
-const PRODUCT_SELECT = "*, images:product_images(src, alt, position)";
+/**
+ * Collections ride along with the product so the storefront can filter by
+ * them. They were already stored — `collection_products` has driven the admin
+ * and the collection pages since the start — but the public payload never
+ * carried them, so a shopper's filter had nothing to read.
+ *
+ * Joined here rather than fetched per product: one query still returns the
+ * whole catalogue, and the storefront filters in memory over what it already
+ * has.
+ */
+const PRODUCT_SELECT =
+  "*, images:product_images(src, alt, position), collections:collection_products(collection_handle)";
 
 type ImageRow = { src: string; alt: string; position: number };
+type CollectionRow = { collection_handle: string };
 
 /** Shapes a DB row (snake_case) into the storefront's camelCase product. */
 function mapProduct(row: Record<string, unknown>) {
@@ -14,7 +26,14 @@ function mapProduct(row: Record<string, unknown>) {
     .sort((a, b) => a.position - b.position)
     .map(({ src, alt }) => ({ src, alt }));
 
+  // "all" is every product by definition, so it would be a filter option that
+  // never narrows anything — dropped here rather than in the UI.
+  const collections = ((row.collections as CollectionRow[]) ?? [])
+    .map((c) => c.collection_handle)
+    .filter((h) => h && h !== "all");
+
   return {
+    collections,
     id: row.id,
     handle: row.handle,
     title: row.title,
