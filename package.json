@@ -13,6 +13,9 @@
     "start": "node dist/src/index.js",
     "seed": "tsx scripts/seed.ts",
     "seed:reviews": "tsx scripts/seed-reviews.ts",
+    "backup-test-data": "tsx scripts/backup-test-data.ts",
+    "clear-test-data": "tsx scripts/clear-test-data.ts",
+    "clear-tracking-data": "tsx scripts/clear-tracking-data.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
