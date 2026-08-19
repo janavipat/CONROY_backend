@@ -6,6 +6,7 @@ import { getSettings, updateSettings } from "../controllers/settings.controller.
 import { createShipmentAction, getShipmentForOrder } from "../controllers/shipping.controller.js";
 import { runShipmentJobs } from "../controllers/jobs.controller.js";
 import { delhiveryWebhook } from "../controllers/webhooks.controller.js";
+import { getServiceability } from "../controllers/serviceability.controller.js";
 import { submitChat, listChat, setChatStatus, deleteChat } from "../controllers/chat.controller.js";
 import { listAddresses, saveAddresses } from "../controllers/address.controller.js";
 import { getProduct, listProducts } from "../controllers/products.controller.js";
@@ -123,6 +124,9 @@ router.put("/addresses", asyncHandler(saveAddresses));
 // Cron entrypoint — protected by CRON_SECRET (checked inside the handler,
 // not requireAdmin, since Vercel Cron authenticates differently). GET, not
 // POST: Vercel Cron Jobs always send a GET request, no way to configure that.
+// Public: checkout asks this before taking money for an undeliverable address.
+router.get("/shipping/serviceability", asyncHandler(getServiceability));
+
 router.get("/jobs/shipment/run", asyncHandler(runShipmentJobs));
 
 // Delhivery webhook — the path token is the auth (checked inside the handler).
