@@ -91,16 +91,43 @@ export function assertNotProductionDatabase(supabaseUrl: string): void {
 }
 
 /**
- * Refuses live payment keys in staging. An rzp_live_ key here would charge a
- * real card — the ₹1 order is meant to be a sandbox transaction, not a small
- * real one.
+ * True when this staging deployment has been explicitly cleared to take real
+ * money. Off unless someone sets it, so the safe state is the default one.
+ */
+export function allowsLivePayments(): boolean {
+  return (process.env.STAGING_ALLOW_LIVE_PAYMENTS ?? "").trim().toLowerCase() === "true";
+}
+
+/**
+ * Refuses live payment keys in staging — unless the deployment has opted in.
+ *
+ * The default stays "no": a staging order is normally a sandbox transaction,
+ * and an rzp_live_ key slipped in by accident would charge a real card for a
+ * ₹1 order that only exists in the test database. Opting in takes a second,
+ * deliberate variable (STAGING_ALLOW_LIVE_PAYMENTS=true) rather than deleting
+ * the check, so the choice is visible in the environment and can be reversed
+ * by unsetting one value.
+ *
+ * With it on, every payment here is REAL: real charge, real settlement, and a
+ * refund to issue by hand, recorded against the staging database rather than
+ * the production books.
  */
 export function assertNotLivePaymentKeys(razorpayKeyId: string): void {
   if (!isStaging()) return;
-  if (razorpayKeyId.startsWith("rzp_live_")) {
-    throw new Error(
-      "Refusing to start: APP_ENV=staging but RAZORPAY_KEY_ID is a live key. " +
-        "Use the rzp_test_… pair from Razorpay → Settings → API Keys → Test Mode.",
+  if (!razorpayKeyId.startsWith("rzp_live_")) return;
+  if (allowsLivePayments()) {
+    console.warn(
+      "\n⚠️  STAGING IS TAKING REAL PAYMENTS — RAZORPAY_KEY_ID is a live key and\n" +
+        "   STAGING_ALLOW_LIVE_PAYMENTS=true. Every checkout here charges a real\n" +
+        "   card or UPI account. Orders are written to the STAGING database, so they\n" +
+        "   will not appear in the production admin — reconcile and refund by hand.\n",
     );
+    return;
   }
+  throw new Error(
+    "Refusing to start: APP_ENV=staging but RAZORPAY_KEY_ID is a live key. " +
+      "Use the rzp_test_… pair from Razorpay → Settings → API Keys → Test Mode, or set " +
+      "STAGING_ALLOW_LIVE_PAYMENTS=true to take real money from this deployment on purpose.",
+  );
 }
+

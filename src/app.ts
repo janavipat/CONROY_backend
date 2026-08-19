@@ -61,11 +61,16 @@ export function createApp() {
             staging: {
               supabaseRef: env.SUPABASE_URL.replace(/^https?:\/\//, "").split(".")[0],
               priceOverrideInr: env.stagingPriceOverride,
+              // "live" is reported explicitly rather than lumped into "unknown":
+              // whether this deployment can charge a real card is the single
+              // most important thing this endpoint says about it.
               razorpayMode: env.RAZORPAY_KEY_ID.startsWith("rzp_test_")
                 ? "test"
-                : env.RAZORPAY_KEY_ID
-                  ? "unknown"
-                  : "demo",
+                : env.RAZORPAY_KEY_ID.startsWith("rzp_live_")
+                  ? "LIVE - real money"
+                  : env.RAZORPAY_KEY_ID
+                    ? "unknown"
+                    : "demo",
             },
           }
         : {}),
