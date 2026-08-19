@@ -21,7 +21,7 @@ import { reverseGeocode } from "./reverseGeocode.js";
  * under a minute instead of lingering for over one, which made the count read
  * higher than the number of people actually on the site.
  */
-const LIVE_TTL_MS = 40_000;
+export const LIVE_TTL_MS = 40_000;
 
 export interface VisitorPing {
   sessionId: string;

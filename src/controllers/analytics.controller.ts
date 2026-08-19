@@ -1,6 +1,6 @@
 import type { Request, Response } from "express";
 import { z } from "zod";
-import { recordPing, dropPing, snapshot } from "../lib/liveVisitors.js";
+import { recordPing, dropPing, snapshot, LIVE_TTL_MS } from "../lib/liveVisitors.js";
 import { supabaseAdmin } from "../lib/supabase.js";
 import { recordCartEvent, readCartEvents } from "../lib/cartEvents.js";
 import { ApiError } from "../middleware/errors.js";
@@ -96,6 +96,45 @@ export async function trackLeave(req: Request, res: Response) {
 /** GET /api/admin/live — live-visitor snapshot for the admin dashboard. */
 export async function getLiveVisitors(_req: Request, res: Response) {
   res.json({ ok: true, data: await snapshot() });
+}
+
+/**
+ * GET /api/admin/live/customers — phone numbers of signed-in shoppers who are
+ * on the store right now, for the online dot on the Customers page.
+ *
+ * Deliberately narrow: the live-visitor snapshot omits phone numbers on
+ * purpose, and widening it would leak them into the dashboard panel that has
+ * no use for them. This returns identifiers only — no location, no session id
+ * — which is all the Customers table needs to match a row.
+ *
+ * Presence, never account state: only rows whose heartbeat is inside the live
+ * window are returned, so having an account never reads as being online.
+ */
+export async function getOnlineCustomers(_req: Request, res: Response) {
+  const cutoff = new Date(Date.now() - LIVE_TTL_MS).toISOString();
+  const { data, error } = await supabaseAdmin
+    .from("live_visitors")
+    .select("phone, first_seen, last_seen")
+    .not("phone", "is", null)
+    .gte("last_seen", cutoff);
+
+  if (error) {
+    // The table may not exist yet on an un-migrated database; an empty result
+    // simply means nothing shows as online.
+    res.json({ ok: true, data: { phones: [], since: {} } });
+    return;
+  }
+
+  const since: Record<string, string> = {};
+  for (const r of data ?? []) {
+    const row = r as Record<string, unknown>;
+    const phone = String(row.phone);
+    const at = String(row.first_seen);
+    // A customer on two devices has two rows; keep the earlier arrival.
+    if (!since[phone] || at < since[phone]) since[phone] = at;
+  }
+
+  res.json({ ok: true, data: { phones: Object.keys(since), since } });
 }
 
 /* ─────────────────────── Persisted analytics events ─────────────────────── */
