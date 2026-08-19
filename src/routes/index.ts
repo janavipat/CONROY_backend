@@ -7,6 +7,10 @@ import { createShipmentAction, getShipmentForOrder } from "../controllers/shippi
 import { runShipmentJobs } from "../controllers/jobs.controller.js";
 import { delhiveryWebhook } from "../controllers/webhooks.controller.js";
 import { submitChat, listChat, setChatStatus, deleteChat } from "../controllers/chat.controller.js";
+import {
+  listNotifications,
+  markNotificationsRead,
+} from "../controllers/notifications.controller.js";
 import { listAddresses, saveAddresses } from "../controllers/address.controller.js";
 import { getProduct, listProducts } from "../controllers/products.controller.js";
 import {
@@ -28,6 +32,7 @@ import {
 import {
   trackVisit,
   getLiveVisitors,
+  getOnlineCustomers,
   customerActivity,
   syncCustomerCart,
   trackLeave,
@@ -177,6 +182,10 @@ router.put("/admin/settings", asyncHandler(updateSettings));
 router.get("/admin/chat", asyncHandler(listChat));
 router.patch("/admin/chat/:id", asyncHandler(setChatStatus));
 router.delete("/admin/chat/:id", asyncHandler(deleteChat));
+
+// Notifications — derived from existing records on read; nothing writes events.
+router.get("/admin/notifications", asyncHandler(listNotifications));
+router.post("/admin/notifications/read", asyncHandler(markNotificationsRead));
 router.post("/admin/upload", upload.single("file"), asyncHandler(uploadImage));
 router.post("/admin/products", asyncHandler(createProduct));
 router.put("/admin/products/:handle", asyncHandler(updateProduct));
@@ -195,6 +204,7 @@ router.delete("/admin/collections/:handle", asyncHandler(deleteCollection));
 router.put("/admin/collections/:handle/products", asyncHandler(setCollectionProducts));
 router.get("/admin/stats", asyncHandler(getStats));
 router.get("/admin/live", asyncHandler(getLiveVisitors));
+router.get("/admin/live/customers", asyncHandler(getOnlineCustomers));
 router.get("/admin/analytics", asyncHandler(getAnalytics));
 router.get("/admin/abandoned", asyncHandler(getAbandonedCustomers));
 router.get("/admin/whatsapp/health", asyncHandler(whatsappHealth));
