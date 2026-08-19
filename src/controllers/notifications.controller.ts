@@ -82,6 +82,29 @@ const EMPTY: StoreShape = {
 
 const store = jsonStore<StoreShape>("admin-notifications.json", EMPTY);
 
+/**
+ * Fills in anything a previously stored snapshot predates.
+ *
+ * The fallback above only applies when no file exists at all, so a file written
+ * by an earlier version arrives missing whichever fields have been added since
+ * — and spreading an absent array throws. Reading through this keeps an old
+ * stored shape working instead of 500ing until someone clears it by hand.
+ */
+function normaliseState(state: Partial<StoreShape> | null | undefined): StoreShape {
+  const snap = state?.snapshot ?? ({} as Partial<Snapshot>);
+  return {
+    notifications: Array.isArray(state?.notifications) ? state.notifications : [],
+    snapshot: {
+      watermarks: snap.watermarks ?? {},
+      orderStatus: snap.orderStatus ?? {},
+      productHandles: Array.isArray(snap.productHandles) ? snap.productHandles : [],
+      collectionHandles: Array.isArray(snap.collectionHandles) ? snap.collectionHandles : [],
+      customerSessions: Array.isArray(snap.customerSessions) ? snap.customerSessions : [],
+      initialised: Boolean(snap.initialised),
+    },
+  };
+}
+
 /** Keeps the feed from growing without bound. */
 const MAX_NOTIFICATIONS = 200;
 
@@ -427,7 +450,7 @@ async function scan(prev: Snapshot): Promise<{ fresh: AdminNotification[]; next:
 
 /** GET /api/admin/notifications — the feed plus its unread count. */
 export async function listNotifications(_req: Request, res: Response) {
-  const state = await store.read();
+  const state = normaliseState(await store.read());
   const { fresh, next } = await scan(state.snapshot);
 
   // Merge, keeping anything already stored (and its read flag) authoritative.
@@ -458,7 +481,7 @@ const readSchema = z.object({
 /** POST /api/admin/notifications/read — mark one, or all, as read. */
 export async function markNotificationsRead(req: Request, res: Response) {
   const { id } = readSchema.parse(req.body ?? {});
-  const state = await store.read();
+  const state = normaliseState(await store.read());
   const notifications = state.notifications.map((n) =>
     !id || n.id === id ? { ...n, read: true } : n,
   );
