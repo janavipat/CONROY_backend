@@ -84,7 +84,24 @@ export async function verifyPayment(req: Request, res: Response) {
     throw new ApiError(400, "Razorpay is not configured on the server.");
   }
 
-  // 1 ── Idempotency. Cheapest check, and the one that must come first.
+  // 1 ── Signature first, and before ANY read: this callback really came from Razorpay.
+  const valid = verifyRazorpaySignature({
+    razorpayOrderId: input.razorpayOrderId,
+    razorpayPaymentId: input.razorpayPaymentId,
+    razorpaySignature: input.razorpaySignature,
+  });
+  if (!valid) {
+    console.error(`${tag} SIGNATURE MISMATCH for ${input.razorpayOrderId}. Refusing to read or write an order.`);
+    throw new ApiError(400, "Payment verification failed. Signature mismatch.");
+  }
+  console.log(`${tag} signature ok.`);
+
+  // 2 ── Idempotency, but only for a caller that already proved the callback
+  //      is genuine. This response carries the customer's name, phone and
+  //      address, so it sits behind the signature check rather than in front
+  //      of it — otherwise anyone holding a payment id could read the order by
+  //      sending a forged signature. A real retry carries the same valid
+  //      signature, so nothing legitimate is lost by the ordering.
   const { data: existing } = await supabaseAdmin
     .from("orders")
     .select("*, items:order_items(*)")
@@ -100,18 +117,6 @@ export async function verifyPayment(req: Request, res: Response) {
       data: existing,
     });
   }
-
-  // 2 ── Signature: this callback really came from Razorpay.
-  const valid = verifyRazorpaySignature({
-    razorpayOrderId: input.razorpayOrderId,
-    razorpayPaymentId: input.razorpayPaymentId,
-    razorpaySignature: input.razorpaySignature,
-  });
-  if (!valid) {
-    console.error(`${tag} SIGNATURE MISMATCH for ${input.razorpayOrderId}. Refusing to write an order.`);
-    throw new ApiError(400, "Payment verification failed. Signature mismatch.");
-  }
-  console.log(`${tag} signature ok.`);
 
   // 3 ── Razorpay is the source of truth for whether money moved.
   const payment = await fetchRazorpayPayment(input.razorpayPaymentId);
