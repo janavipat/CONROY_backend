@@ -15,13 +15,28 @@ import {
 dotenv.config();
 dotenv.config({ path: ".env.local", override: true });
 
+/**
+ * A credential read from the environment, with surrounding whitespace removed.
+ *
+ * Dashboards and CLIs routinely store a trailing newline on a pasted value, and
+ * the two ways a secret gets used disagree about whether that matters. HTTP
+ * Basic auth tolerated it, so Razorpay order creation kept working; HMAC does
+ * not, so every signature check failed and every online payment was captured
+ * and then rejected with "Signature mismatch" before an order could be written.
+ * One invisible byte, and the only symptom was on the far side of a real charge.
+ *
+ * Trimming here means no caller has to remember. No legitimate credential has
+ * meaningful leading or trailing whitespace.
+ */
+const secret = () => z.string().trim().default("");
+
 /** Validates and exposes a typed, fail-fast view of the environment. */
 const EnvSchema = z.object({
   // Supabase is optional so the server can boot in OTP mock mode before keys
   // are configured. Catalog/orders/real-auth require these to be set.
-  SUPABASE_URL: z.string().default(""),
-  SUPABASE_ANON_KEY: z.string().default(""),
-  SUPABASE_SERVICE_ROLE_KEY: z.string().default(""),
+  SUPABASE_URL: secret(),
+  SUPABASE_ANON_KEY: secret(),
+  SUPABASE_SERVICE_ROLE_KEY: secret(),
 
   PORT: z.coerce.number().default(4000),
   NODE_ENV: z.enum(["development", "production", "test"]).default("development"),
@@ -37,8 +52,8 @@ const EnvSchema = z.object({
 
   // WhatsApp Cloud API (OTP via WhatsApp — no SMS, so no India DLT needed).
   // ACCESS_TOKEN is SECRET — server-side only. Free for ~1,000 conversations/mo.
-  WHATSAPP_ACCESS_TOKEN: z.string().default(""),
-  WHATSAPP_PHONE_NUMBER_ID: z.string().default(""),
+  WHATSAPP_ACCESS_TOKEN: secret(),
+  WHATSAPP_PHONE_NUMBER_ID: secret(),
   WHATSAPP_TEMPLATE_NAME: z.string().default(""),
   WHATSAPP_TEMPLATE_LANG: z.string().default("en_US"),
   WHATSAPP_OTP_BUTTON: z.string().default("true"),
@@ -46,8 +61,8 @@ const EnvSchema = z.object({
   // Twilio (OTP SMS provider, sent directly from the backend). Auth token is
   // SECRET — server-side only. TWILIO_FROM must be a Twilio-owned number (or use
   // a Messaging Service SID); a personal mobile number can't be a sender.
-  TWILIO_ACCOUNT_SID: z.string().default(""),
-  TWILIO_AUTH_TOKEN: z.string().default(""),
+  TWILIO_ACCOUNT_SID: secret(),
+  TWILIO_AUTH_TOKEN: secret(),
   TWILIO_FROM: z.string().default(""),
   TWILIO_MESSAGING_SERVICE_SID: z.string().default(""),
 
@@ -60,8 +75,8 @@ const EnvSchema = z.object({
   // Razorpay (online payments). Both keys are needed for live checkout; unset →
   // the storefront falls back to free demo checkout. KEY_SECRET is SECRET —
   // server-side only (never expose it to the frontend). KEY_ID is public.
-  RAZORPAY_KEY_ID: z.string().default(""),
-  RAZORPAY_KEY_SECRET: z.string().default(""),
+  RAZORPAY_KEY_ID: secret(),
+  RAZORPAY_KEY_SECRET: secret(),
 
   // SMTP (welcome/transactional email). Unset → emails are logged, not sent.
   SMTP_HOST: z.string().default(""),
@@ -80,25 +95,25 @@ const EnvSchema = z.object({
   FIREBASE_MAIL_COLLECTION: z.string().default("mail"),
 
   // Admin panel key. Required as `x-admin-key` on /api/admin/* when set.
-  ADMIN_KEY: z.string().default(""),
+  ADMIN_KEY: secret(),
 
   // Delhivery (courier). Set only in .env.local (local dev) and the Vercel
   // dashboard (production) — never in the committed .env. Unset → shipment
   // creation is disabled; nothing else in the app depends on these.
-  DELHIVERY_API_URL: z.string().default(""),
-  DELHIVERY_API_TOKEN: z.string().default(""),
-  DELHIVERY_CLIENT_NAME: z.string().default(""),
-  DELHIVERY_PICKUP_LOCATION: z.string().default(""),
+  DELHIVERY_API_URL: secret(),
+  DELHIVERY_API_TOKEN: secret(),
+  DELHIVERY_CLIENT_NAME: secret(),
+  DELHIVERY_PICKUP_LOCATION: secret(),
   // This Delhivery account has no shared-secret webhook signature available —
   // the long random path segment IS the secret (spec's own fallback: "treat
   // a long random path token as the minimum"). The webhook URL is
   // /api/webhooks/delhivery/<this value>.
-  DELHIVERY_WEBHOOK_TOKEN: z.string().default(""),
+  DELHIVERY_WEBHOOK_TOKEN: secret(),
 
   // Vercel Cron sends `Authorization: Bearer $CRON_SECRET` automatically when
   // this env var is set — used to verify /api/jobs/shipment/run isn't being
   // hit by anyone else.
-  CRON_SECRET: z.string().default(""),
+  CRON_SECRET: secret(),
 });
 
 const parsed = EnvSchema.safeParse(process.env);

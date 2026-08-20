@@ -71,3 +71,43 @@ export function verifyRazorpaySignature(params: {
   const b = Buffer.from(params.razorpaySignature);
   return a.length === b.length && crypto.timingSafeEqual(a, b);
 }
+
+export interface RazorpayPayment {
+  id: string;
+  status: string;
+  captured: boolean;
+  amount: number; // paise
+  currency: string;
+  order_id?: string;
+  email?: string;
+  contact?: string;
+}
+
+/**
+ * The payment as Razorpay itself reports it.
+ *
+ * The HMAC signature proves the browser's callback was not forged; it does not
+ * prove the money moved. Only Razorpay knows that, and a payment can be
+ * authorized-but-not-captured, failed after the callback, or already refunded.
+ * An order written on the signature alone is an order written on the client's
+ * word about someone else's money.
+ *
+ * Returns null when the payment cannot be read, which the caller must treat as
+ * "unknown", never as "fine".
+ */
+export async function fetchRazorpayPayment(paymentId: string): Promise<RazorpayPayment | null> {
+  const auth = Buffer.from(`${env.RAZORPAY_KEY_ID}:${env.RAZORPAY_KEY_SECRET}`).toString("base64");
+  try {
+    const res = await fetch(`${RAZORPAY_API}/payments/${encodeURIComponent(paymentId)}`, {
+      headers: { Authorization: `Basic ${auth}` },
+    });
+    if (!res.ok) {
+      console.error(`[payment] Razorpay lookup failed for ${paymentId}: HTTP ${res.status}`);
+      return null;
+    }
+    return (await res.json()) as RazorpayPayment;
+  } catch (err) {
+    console.error(`[payment] Razorpay lookup threw for ${paymentId}:`, err instanceof Error ? err.message : err);
+    return null;
+  }
+}
