@@ -2,6 +2,7 @@ import type { Request, Response } from "express";
 import { z } from "zod";
 import { recordPing, dropPing, snapshot, LIVE_TTL_MS } from "../lib/liveVisitors.js";
 import { supabaseAdmin } from "../lib/supabase.js";
+import { softDeleteReady } from "../lib/softDelete.js";
 import { recordCartEvent, readCartEvents } from "../lib/cartEvents.js";
 import { ApiError } from "../middleware/errors.js";
 
@@ -460,9 +461,11 @@ export async function getAbandonedCustomers(_req: Request, res: Response) {
   // Attributed add-to-cart events (Storage-backed, no migration needed).
   const adds = await readCartEvents();
 
-  const { data: orders } = await supabaseAdmin
+  let purchasedQuery = supabaseAdmin
     .from("orders")
     .select("phone, email, full_name, items:order_items(product_handle)");
+  if (await softDeleteReady()) purchasedQuery = purchasedQuery.is("deleted_at", null);
+  const { data: orders } = await purchasedQuery;
 
   // What each customer (by phone) has actually purchased.
   const purchased = new Map<string, Set<string>>();
@@ -594,12 +597,14 @@ export async function getAnalytics(_req: Request, res: Response) {
   const { data: purchased } = await supabaseAdmin.from("order_items").select("product_handle");
   const { data: likes } = await supabaseAdmin.from("product_likes").select("product_handle");
 
-  const { data: orders } = await supabaseAdmin
+  let analyticsQuery = supabaseAdmin
     .from("orders")
     .select(
       "id, email, phone, full_name, subtotal, discount, status, created_at, items:order_items(product_handle, title, size, fit, price, quantity)",
     )
     .order("created_at", { ascending: false });
+  if (await softDeleteReady()) analyticsQuery = analyticsQuery.is("deleted_at", null);
+  const { data: orders } = await analyticsQuery;
 
   const { data: returns } = await supabaseAdmin
     .from("returns")

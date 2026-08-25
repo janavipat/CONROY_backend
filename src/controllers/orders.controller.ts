@@ -7,6 +7,7 @@ import { resolveCart, persistOrder } from "../lib/pricing.js";
 import { computeDiscount } from "../lib/offers.js";
 import { stopShipmentsForOrder } from "../lib/shipping/stopShipments.js";
 import { retireCreateJob } from "../services/shipping/jobs.js";
+import { softDeleteReady } from "../lib/softDelete.js";
 
 /**
  * POST /api/orders — creates an order; prices are resolved server-side.
@@ -46,11 +47,16 @@ export async function listOrdersByPhone(req: Request, res: Response) {
   const phone = String(req.query.phone ?? "").trim();
   if (!phone) throw new ApiError(400, "A phone query parameter is required.");
 
-  const { data, error } = await supabaseAdmin
+  let query = supabaseAdmin
     .from("orders")
     .select("*, items:order_items(*)")
     .eq("phone", phone)
     .order("created_at", { ascending: false });
+  // An order an admin has deleted is gone as far as the shopper is concerned —
+  // the same as when deleting removed the row outright.
+  if (await softDeleteReady()) query = query.is("deleted_at", null);
+
+  const { data, error } = await query;
   if (error) throw new ApiError(500, error.message);
 
   res.json({ ok: true, count: data?.length ?? 0, data: data ?? [] });
@@ -231,6 +237,10 @@ export async function getOrder(req: Request, res: Response) {
 
   if (error) throw new ApiError(500, error.message);
   if (!data) throw new ApiError(404, `Order not found: ${id}`);
+  // Deleted orders are invisible to the shopper, not merely hidden from lists.
+  if ((await softDeleteReady()) && data.deleted_at) {
+    throw new ApiError(404, `Order not found: ${id}`);
+  }
 
   res.json({ ok: true, data });
 }

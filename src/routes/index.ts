@@ -81,6 +81,9 @@ import {
   listAllOrders,
   getAdminOrder,
   deleteAdminOrder,
+  listDeletedOrders,
+  restoreAdminOrder,
+  purgeAdminOrder,
   listAllReturns,
   listCustomers,
   getAccounts,
@@ -216,8 +219,11 @@ router.get("/admin/abandoned", asyncHandler(getAbandonedCustomers));
 router.get("/admin/whatsapp/health", asyncHandler(whatsappHealth));
 router.post("/admin/whatsapp/test", asyncHandler(whatsappTest));
 router.get("/admin/orders", asyncHandler(listAllOrders));
+router.get("/admin/orders/deleted", asyncHandler(listDeletedOrders));
 router.get("/admin/orders/:id", asyncHandler(getAdminOrder));
 router.delete("/admin/orders/:id", asyncHandler(deleteAdminOrder));
+router.post("/admin/orders/:id/restore", asyncHandler(restoreAdminOrder));
+router.delete("/admin/orders/:id/permanent", asyncHandler(purgeAdminOrder));
 router.get("/admin/orders/:orderId/shipment", asyncHandler(getShipmentForOrder));
 router.get("/admin/orders/:orderId/shipment/track", asyncHandler(trackShipmentForOrder));
 router.post("/admin/shipments/drain", asyncHandler(drainShipmentJobs));

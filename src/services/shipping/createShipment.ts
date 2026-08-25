@@ -61,6 +61,16 @@ export async function createShipmentForOrder(orderId: string): Promise<CreateShi
     };
   }
 
+  // Same reasoning for a deleted order: it has left the working lists, so
+  // nothing should be handed to the courier on its behalf.
+  if (order.deleted_at) {
+    return {
+      ok: false,
+      classification: "permanent",
+      message: "Order is deleted — no shipment was created.",
+    };
+  }
+
   const missing = REQUIRED_ADDRESS_FIELDS.filter((k) => !order[k]);
   if (missing.length) {
     return {

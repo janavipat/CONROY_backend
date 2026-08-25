@@ -3,6 +3,8 @@ import { supabaseAdmin } from "../lib/supabase.js";
 import { ApiError } from "../middleware/errors.js";
 import { uploadProductImage } from "../lib/storage.js";
 import { stopShipmentsForOrder } from "../lib/shipping/stopShipments.js";
+import { retireCreateJob } from "../services/shipping/jobs.js";
+import { softDeleteReady } from "../lib/softDelete.js";
 import {
   adminProductSchema,
   updateReturnStatusSchema,
@@ -341,29 +343,39 @@ function paymentMethodOf(
 
 /** GET /api/admin/orders — every order with items + customer + payment method. */
 export async function listAllOrders(_req: Request, res: Response) {
-  const { data, error } = await supabaseAdmin
+  let query = supabaseAdmin
     .from("orders")
     .select("*, items:order_items(*)")
     .order("created_at", { ascending: false });
+  // Deleted orders live in their own section and must not appear here.
+  if (await softDeleteReady()) query = query.is("deleted_at", null);
+
+  const { data, error } = await query;
   if (error) throw new ApiError(500, error.message);
 
-  /*
-   * The courier state is loaded alongside, so an order that never reached
-   * Delhivery is identifiable from the list itself. Without it the panel
-   * showed a perfectly normal-looking order with no shipment behind it.
-   */
+  const orders = await withShipmentState(data ?? []);
+  res.json({ ok: true, count: orders.length, data: orders });
+}
+
+/**
+ * Attaches courier state to a batch of orders, so an order that never reached
+ * Delhivery is identifiable from the list itself rather than only from its
+ * detail page.
+ */
+async function withShipmentState(rows: Record<string, unknown>[]) {
   const [{ data: shipments }, { data: jobs }] = await Promise.all([
     supabaseAdmin.from("shipments").select("order_id, waybill, status"),
-    supabaseAdmin.from("shipment_jobs").select("order_id, kind, state, attempts, last_error").eq("kind", "create"),
+    supabaseAdmin
+      .from("shipment_jobs")
+      .select("order_id, kind, state, attempts, last_error")
+      .eq("kind", "create"),
   ]);
   const shipmentBy = new Map((shipments ?? []).map((s) => [s.order_id as string, s]));
   const jobBy = new Map((jobs ?? []).map((j) => [j.order_id as string, j]));
 
-  const orders = (data ?? []).map((o) =>
+  return rows.map((o) =>
     mapAdminOrder(o, shipmentBy.get(o.id as string), jobBy.get(o.id as string)),
   );
-
-  res.json({ ok: true, count: orders.length, data: orders });
 }
 
 /** Shared mapper: a raw orders row (with joined items) → admin order shape. */
@@ -412,6 +424,9 @@ function mapAdminOrder(
     shipmentJobAttempts: (job?.attempts as number) ?? 0,
     shipmentError: (job?.last_error as string) || null,
     shipmentSynced: Boolean(shipment?.waybill),
+    /** Set while the order sits in Deleted Orders; null once restored. */
+    deletedAt: (o.deleted_at as string) || null,
+    deletedBy: (o.deleted_by as string) || null,
     fulfillmentStatus: (o.fulfillment_status as string) || "Pending",
     refundStatus: (o.refund_status as string) || "None",
     cancelReason: (o.cancel_reason as string) || null,
@@ -435,29 +450,37 @@ export async function getAdminOrder(req: Request, res: Response) {
 }
 
 /**
- * DELETE /api/admin/orders/:id — removes an order from the store entirely.
+ * DELETE /api/admin/orders/:id — moves an order to Deleted Orders.
  *
- * The courier is dealt with first, through the same integration the customer
- * cancellation uses: deleting locally while a booking is still live would leave
- * the parcel sitting in Delhivery One with nothing on our side pointing at it,
- * and the waybill would be unreachable afterwards because the row is gone.
- * A refusal from Delhivery aborts the delete and leaves the order untouched.
+ * A soft delete: the row stays, with every item, payment reference, refund
+ * state, cancellation record and waybill still attached, and simply leaves the
+ * working lists. Removing the row outright used to cascade all of that away,
+ * which destroyed the only record of what had happened and could not be undone.
  *
- * order_items, shipments, shipment_jobs, shipment_scans and returns are all
- * declared `on delete cascade`, so the row going is enough to clean up after it.
+ * The courier is still dealt with first, through the same integration the
+ * customer cancellation uses — a deleted order must never leave a live booking
+ * sitting in Delhivery One. A refusal aborts the delete and changes nothing.
  */
 export async function deleteAdminOrder(req: Request, res: Response) {
   const { id } = req.params;
 
-  // Fetched first so a second click on an already-deleted order is a clean 404
-  // rather than a silent success that looks like it deleted something.
+  if (!(await softDeleteReady())) {
+    throw new ApiError(
+      503,
+      "Deleted Orders is not available yet — supabase/soft-delete-orders.sql has not been run.",
+    );
+  }
+
+  // Fetched first so a second click on an already-deleted order is refused
+  // rather than silently succeeding as though it deleted something.
   const { data: order, error } = await supabaseAdmin
     .from("orders")
-    .select("id")
+    .select("id, deleted_at")
     .eq("id", id)
     .maybeSingle();
   if (error) throw new ApiError(500, error.message);
-  if (!order) throw new ApiError(404, "Order not found. It may already have been deleted.");
+  if (!order) throw new ApiError(404, "Order not found.");
+  if (order.deleted_at) throw new ApiError(409, "This order is already in Deleted Orders.");
 
   const stop = await stopShipmentsForOrder(id);
   if (stop.blocked) {
@@ -468,13 +491,114 @@ export async function deleteAdminOrder(req: Request, res: Response) {
     );
   }
 
-  const { error: dErr } = await supabaseAdmin.from("orders").delete().eq("id", id);
+  const { error: dErr } = await supabaseAdmin
+    .from("orders")
+    .update({ deleted_at: new Date().toISOString(), deleted_by: "admin" })
+    .eq("id", id);
   if (dErr) {
     console.error(`Admin order delete failed for ${id}:`, dErr.message);
     throw new ApiError(500, "The shipment was stopped but the order could not be deleted.");
   }
 
-  res.json({ ok: true, message: "Order deleted.", shipmentsCancelled: stop.stopped.length });
+  // A deleted order must never be picked up by the shipment worker later.
+  await retireCreateJob(id, "Order moved to Deleted Orders by an admin.");
+
+  res.json({
+    ok: true,
+    message: "Order moved to Deleted Orders.",
+    shipmentsCancelled: stop.stopped.length,
+  });
+}
+
+/** GET /api/admin/orders/deleted — the Deleted Orders section. */
+export async function listDeletedOrders(_req: Request, res: Response) {
+  if (!(await softDeleteReady())) {
+    // Nothing can have been soft-deleted yet, so an empty section is correct.
+    res.json({ ok: true, count: 0, data: [], available: false });
+    return;
+  }
+
+  const { data, error } = await supabaseAdmin
+    .from("orders")
+    .select("*, items:order_items(*)")
+    .not("deleted_at", "is", null)
+    .order("deleted_at", { ascending: false });
+  if (error) throw new ApiError(500, error.message);
+
+  const orders = await withShipmentState(data ?? []);
+  res.json({ ok: true, count: orders.length, data: orders, available: true });
+}
+
+/** POST /api/admin/orders/:id/restore — puts a deleted order back. */
+export async function restoreAdminOrder(req: Request, res: Response) {
+  const { id } = req.params;
+  if (!(await softDeleteReady())) {
+    throw new ApiError(503, "Deleted Orders is not available yet.");
+  }
+
+  const { data: order, error } = await supabaseAdmin
+    .from("orders")
+    .select("id, deleted_at")
+    .eq("id", id)
+    .maybeSingle();
+  if (error) throw new ApiError(500, error.message);
+  if (!order) throw new ApiError(404, "Order not found.");
+  if (!order.deleted_at) throw new ApiError(409, "This order is not in Deleted Orders.");
+
+  const { error: rErr } = await supabaseAdmin
+    .from("orders")
+    .update({ deleted_at: null, deleted_by: null })
+    .eq("id", id);
+  if (rErr) throw new ApiError(500, rErr.message);
+
+  /*
+   * Deliberately does NOT re-queue a shipment. The delete cancelled whatever
+   * booking existed, and silently re-manifesting a restored order would put a
+   * parcel back on a courier without anyone asking for it — the admin can press
+   * Ship if that is what they want.
+   */
+  res.json({ ok: true, message: "Order restored." });
+}
+
+/**
+ * DELETE /api/admin/orders/:id/permanent — removes the row for good.
+ *
+ * Only reachable for an order already in Deleted Orders, so this can never be
+ * the first thing that happens to a live order. order_items, shipments,
+ * shipment_jobs, shipment_scans and returns are all `on delete cascade`, so the
+ * row going is enough to clean up after it.
+ */
+export async function purgeAdminOrder(req: Request, res: Response) {
+  const { id } = req.params;
+  if (!(await softDeleteReady())) {
+    throw new ApiError(503, "Deleted Orders is not available yet.");
+  }
+
+  const { data: order, error } = await supabaseAdmin
+    .from("orders")
+    .select("id, deleted_at")
+    .eq("id", id)
+    .maybeSingle();
+  if (error) throw new ApiError(500, error.message);
+  if (!order) throw new ApiError(404, "Order not found.");
+  if (!order.deleted_at) {
+    throw new ApiError(
+      409,
+      "Delete this order first — only orders in Deleted Orders can be removed permanently.",
+    );
+  }
+
+  // Belt and braces: the soft delete already stopped the booking, but a row
+  // must never be destroyed while the courier still holds a live waybill.
+  const stop = await stopShipmentsForOrder(id);
+  if (stop.blocked) {
+    throw new ApiError(stop.blocked.status, `${stop.blocked.message} The order has not been removed.`);
+  }
+
+  const { error: dErr } = await supabaseAdmin.from("orders").delete().eq("id", id);
+  if (dErr) throw new ApiError(500, dErr.message);
+
+  res.json({ ok: true, message: "Order permanently deleted." });
 }
 
 /* ────────────────────────── Admin: customers ────────────────────────────── */
@@ -497,7 +621,9 @@ export async function listCustomers(_req: Request, res: Response) {
   // what the customer actually paid — matching how the Accounts page totals
   // revenue. Summing the gross subtotal here would overstate every buyer by
   // whatever the promotion took off.
-  const { data: orders } = await supabaseAdmin.from("orders").select("phone, subtotal, discount");
+  let spendQuery = supabaseAdmin.from("orders").select("phone, subtotal, discount");
+  if (await softDeleteReady()) spendQuery = spendQuery.is("deleted_at", null);
+  const { data: orders } = await spendQuery;
   const stats = new Map<string, { count: number; spent: number }>();
   for (const o of orders ?? []) {
     const key = o.phone as string | null;
@@ -593,9 +719,11 @@ export async function updateInventory(req: Request, res: Response) {
 /** GET /api/admin/stats — overview metrics for the admin dashboard. */
 export async function getStats(_req: Request, res: Response) {
   // Orders (source of revenue + recent activity).
-  const { data: ordersData } = await supabaseAdmin
+  let statsQuery = supabaseAdmin
     .from("orders")
-    .select("*")
+    .select("*");
+  if (await softDeleteReady()) statsQuery = statsQuery.is("deleted_at", null);
+  const { data: ordersData } = await statsQuery
     .order("created_at", { ascending: false });
   const orders = ordersData ?? [];
 
