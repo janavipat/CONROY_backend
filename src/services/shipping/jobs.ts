@@ -186,3 +186,21 @@ export async function runDueShipmentJobs(limit = 25): Promise<{ processed: numbe
 
 /** Test-only export: exercising reclaim without waiting for a cron pass. */
 export const reclaimStaleJobsForTest = reclaimStaleJobs;
+
+/**
+ * Retires an order's pending "create" job so it can never run later.
+ *
+ * The job is queued at checkout and is independent of the order's state, so an
+ * order cancelled (or otherwise pulled) while its job is still pending would
+ * be manifested afterwards. Best-effort: a missing shipment_jobs table must
+ * never fail an otherwise-valid cancellation.
+ */
+export async function retireCreateJob(orderId: string, reason: string): Promise<void> {
+  const { error } = await supabaseAdmin
+    .from("shipment_jobs")
+    .update({ state: "dead", last_error: reason, locked_at: null })
+    .eq("order_id", orderId)
+    .eq("kind", "create")
+    .in("state", ["queued", "running"]);
+  if (error) console.warn(`Create job not retired for order ${orderId}:`, error.message);
+}

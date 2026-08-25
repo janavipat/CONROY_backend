@@ -47,6 +47,20 @@ export async function createShipmentForOrder(orderId: string): Promise<CreateShi
   if (oErr) throw new ApiError(500, oErr.message);
   if (!order) throw new ApiError(404, "Order not found.");
 
+  /*
+   * A cancelled order must never be handed to the courier. The create job is
+   * queued at checkout and survives independently of the order, so without
+   * this an order cancelled while its job was still pending would be manifested
+   * afterwards — the customer cancels, and a parcel goes out anyway.
+   */
+  if (order.status === "cancelled" || order.fulfillment_status === "Cancelled") {
+    return {
+      ok: false,
+      classification: "permanent",
+      message: "Order is cancelled — no shipment was created.",
+    };
+  }
+
   const missing = REQUIRED_ADDRESS_FIELDS.filter((k) => !order[k]);
   if (missing.length) {
     return {

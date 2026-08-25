@@ -2,6 +2,7 @@ import type { Request, Response } from "express";
 import { supabaseAdmin } from "../lib/supabase.js";
 import { ApiError } from "../middleware/errors.js";
 import { createShipmentForOrder } from "../services/shipping/createShipment.js";
+import { runDueShipmentJobs } from "../services/shipping/jobs.js";
 import { delhiveryProvider } from "../lib/shipping/providers/delhivery/index.js";
 
 /**
@@ -55,4 +56,18 @@ export async function trackShipmentForOrder(req: Request, res: Response) {
       error: tracked.error?.message ?? null,
     },
   });
+}
+
+/**
+ * POST /api/admin/shipments/drain — runs every shipment job that is due.
+ *
+ * The cron is capped at once a day on the current plan, and the attempt fired
+ * at checkout is not awaited, so a killed attempt could otherwise wait ~24h for
+ * a retry. This is the same queue and the same worker — it just gives the panel
+ * a way to turn the handle, and because a browser is waiting on the request the
+ * function is not frozen part-way through the way the checkout one is.
+ */
+export async function drainShipmentJobs(_req: Request, res: Response) {
+  const result = await runDueShipmentJobs();
+  res.json({ ok: true, ...result });
 }

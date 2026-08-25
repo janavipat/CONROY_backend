@@ -6,6 +6,7 @@ import { createOrderSchema } from "../validators/schemas.js";
 import { resolveCart, persistOrder } from "../lib/pricing.js";
 import { computeDiscount } from "../lib/offers.js";
 import { stopShipmentsForOrder } from "../lib/shipping/stopShipments.js";
+import { retireCreateJob } from "../services/shipping/jobs.js";
 
 /**
  * POST /api/orders — creates an order; prices are resolved server-side.
@@ -169,6 +170,13 @@ export async function cancelOrder(req: Request, res: Response) {
 
     throw new ApiError(500, "Unable to cancel your order. Please try again.");
   }
+
+  /*
+   * A create job queued at checkout outlives the order's state, so one still
+   * pending here would manifest the order after it was cancelled. Retiring it
+   * is what keeps the queue, the order and Delhivery telling the same story.
+   */
+  await retireCreateJob(id, "Order cancelled by the customer before it shipped.");
 
   // Only once the order is safely cancelled. A failure here is cosmetic: the
   // customer-visible state is already correct.

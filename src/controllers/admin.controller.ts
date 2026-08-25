@@ -347,13 +347,31 @@ export async function listAllOrders(_req: Request, res: Response) {
     .order("created_at", { ascending: false });
   if (error) throw new ApiError(500, error.message);
 
-  const orders = (data ?? []).map(mapAdminOrder);
+  /*
+   * The courier state is loaded alongside, so an order that never reached
+   * Delhivery is identifiable from the list itself. Without it the panel
+   * showed a perfectly normal-looking order with no shipment behind it.
+   */
+  const [{ data: shipments }, { data: jobs }] = await Promise.all([
+    supabaseAdmin.from("shipments").select("order_id, waybill, status"),
+    supabaseAdmin.from("shipment_jobs").select("order_id, kind, state, attempts, last_error").eq("kind", "create"),
+  ]);
+  const shipmentBy = new Map((shipments ?? []).map((s) => [s.order_id as string, s]));
+  const jobBy = new Map((jobs ?? []).map((j) => [j.order_id as string, j]));
+
+  const orders = (data ?? []).map((o) =>
+    mapAdminOrder(o, shipmentBy.get(o.id as string), jobBy.get(o.id as string)),
+  );
 
   res.json({ ok: true, count: orders.length, data: orders });
 }
 
 /** Shared mapper: a raw orders row (with joined items) → admin order shape. */
-function mapAdminOrder(o: Record<string, unknown>) {
+function mapAdminOrder(
+  o: Record<string, unknown>,
+  shipment?: Record<string, unknown>,
+  job?: Record<string, unknown>,
+) {
   const discount = (o.discount as number) ?? 0;
   return {
     id: o.id as string,
@@ -384,6 +402,16 @@ function mapAdminOrder(o: Record<string, unknown>) {
      * different questions, and a cancelled COD order has a refund status of
      * "None" precisely because nothing was ever collected.
      */
+    /*
+     * Courier sync state. `shipmentSynced` is the one an operator needs at a
+     * glance: false means this order exists here but not at Delhivery.
+     */
+    waybill: (shipment?.waybill as string) || null,
+    shipmentStatus: (shipment?.status as string) || null,
+    shipmentJobState: (job?.state as string) || null,
+    shipmentJobAttempts: (job?.attempts as number) ?? 0,
+    shipmentError: (job?.last_error as string) || null,
+    shipmentSynced: Boolean(shipment?.waybill),
     fulfillmentStatus: (o.fulfillment_status as string) || "Pending",
     refundStatus: (o.refund_status as string) || "None",
     cancelReason: (o.cancel_reason as string) || null,

@@ -7,6 +7,7 @@ import {
   createShipmentAction,
   getShipmentForOrder,
   trackShipmentForOrder,
+  drainShipmentJobs,
 } from "../controllers/shipping.controller.js";
 import { runShipmentJobs } from "../controllers/jobs.controller.js";
 import { delhiveryWebhook } from "../controllers/webhooks.controller.js";
@@ -219,6 +220,7 @@ router.get("/admin/orders/:id", asyncHandler(getAdminOrder));
 router.delete("/admin/orders/:id", asyncHandler(deleteAdminOrder));
 router.get("/admin/orders/:orderId/shipment", asyncHandler(getShipmentForOrder));
 router.get("/admin/orders/:orderId/shipment/track", asyncHandler(trackShipmentForOrder));
+router.post("/admin/shipments/drain", asyncHandler(drainShipmentJobs));
 router.post("/admin/orders/:orderId/shipment", asyncHandler(createShipmentAction));
 router.get("/admin/customers", asyncHandler(listCustomers));
 router.get("/admin/customers/:phone/activity", asyncHandler(customerActivity));
