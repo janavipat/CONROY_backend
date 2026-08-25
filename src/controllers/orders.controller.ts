@@ -101,14 +101,24 @@ export async function cancelOrder(req: Request, res: Response) {
    * genuine 409, while an unreachable API is a temporary 503 rather than a
    * business rule.
    */
-  const { data: shipment } = await supabaseAdmin
+  // Every shipment row, not one: a re-attempted booking leaves a second
+  // waybill behind, and maybeSingle() would return null for that order and
+  // skip the courier cancellation altogether.
+  const { data: shipmentRows } = await supabaseAdmin
     .from("shipments")
-    .select("id, waybill")
+    .select("id, waybill, create_response")
     .eq("order_id", id)
-    .maybeSingle();
+    .neq("status", "Cancelled");
 
-  const waybill = shipment?.waybill as string | undefined;
-  if (waybill) {
+  type ShipmentRow = { id: string; waybill: string | null; create_response: unknown };
+  for (const shipment of (shipmentRows ?? []) as ShipmentRow[]) {
+    const waybill = shipment.waybill ?? undefined;
+    if (!waybill) continue;
+
+    // A row Delhivery never acknowledged was never really booked, so there is
+    // no pickup to stop — used below to avoid blocking on a stale row.
+    const booked =
+      (shipment.create_response as { success?: boolean } | null)?.success === true;
     const cancelled = await delhiveryProvider.cancelShipment({ waybill });
 
     if (!cancelled.ok) {
@@ -148,7 +158,7 @@ export async function cancelOrder(req: Request, res: Response) {
         );
       }
 
-      if (!unknownWaybill && !alreadyCancelled) {
+      if (booked && !unknownWaybill && !alreadyCancelled) {
         // Anything else is unresolved. The order stays exactly as it was so
         // nothing is marked cancelled while a live shipment could still go out.
         throw new ApiError(
@@ -157,15 +167,16 @@ export async function cancelOrder(req: Request, res: Response) {
         );
       }
 
-      // A waybill Delhivery does not recognise, or one it has already
-      // cancelled, means nothing is going to be collected — so the order can
-      // safely be cancelled rather than the customer being blocked forever.
+      // A waybill Delhivery does not recognise, one it has already cancelled,
+      // or a row it never acknowledged in the first place all mean nothing is
+      // going to be collected — so the order can safely be cancelled rather
+      // than the customer being blocked forever by a stale shipment row.
     }
 
     await supabaseAdmin
       .from("shipments")
       .update({ status: "Cancelled", updated_at: new Date().toISOString() })
-      .eq("id", shipment!.id);
+      .eq("id", shipment.id);
   }
 
   // COD collects on delivery, so nothing was ever charged.
