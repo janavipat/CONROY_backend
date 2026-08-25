@@ -110,19 +110,58 @@ export async function cancelOrder(req: Request, res: Response) {
   const waybill = shipment?.waybill as string | undefined;
   if (waybill) {
     const cancelled = await delhiveryProvider.cancelShipment({ waybill });
+
     if (!cancelled.ok) {
-      const permanent = cancelled.error?.classification === "permanent";
+      const detail = cancelled.error?.message ?? "";
+      // The raw body is the only way to tell these cases apart after the fact,
+      // so it is logged in full rather than summarised.
       console.warn(
-        `Shipment cancel refused for order ${id} (waybill ${waybill}):`,
-        cancelled.error?.message,
+        `Delhivery cancel failed for order ${id} (waybill ${waybill}): ${detail}`,
+        JSON.stringify(cancelled.raw),
       );
-      throw new ApiError(
-        permanent ? 409 : 503,
-        permanent
-          ? "This order is already with the courier and can no longer be cancelled. Please refuse the delivery or start a return once it arrives."
-          : "We couldn't reach the courier to cancel the shipment. Please try again in a moment.",
-      );
+
+      /*
+       * cancelShipment reports every non-Success as "permanent", which means
+       * "do not retry" — not "the parcel has been collected". Treating the two
+       * as the same told customers the courier had their order whenever
+       * Delhivery replied anything other than Success, including for a waybill
+       * it had never heard of.
+       */
+      const says = detail.toLowerCase();
+      const unknownWaybill =
+        says.includes("not found") ||
+        says.includes("does not exist") ||
+        says.includes("no waybill") ||
+        says.includes("invalid waybill");
+      const alreadyCancelled = says.includes("already") && says.includes("cancel");
+      const inTransit =
+        says.includes("picked") ||
+        says.includes("transit") ||
+        says.includes("dispatched") ||
+        says.includes("out for delivery");
+
+      if (inTransit) {
+        // The one case where the parcel really is gone.
+        throw new ApiError(
+          409,
+          "This order is already with the courier and can no longer be cancelled. Please refuse the delivery or start a return once it arrives.",
+        );
+      }
+
+      if (!unknownWaybill && !alreadyCancelled) {
+        // Anything else is unresolved. The order stays exactly as it was so
+        // nothing is marked cancelled while a live shipment could still go out.
+        throw new ApiError(
+          503,
+          "We couldn't confirm the cancellation with the courier. Please try again in a moment.",
+        );
+      }
+
+      // A waybill Delhivery does not recognise, or one it has already
+      // cancelled, means nothing is going to be collected — so the order can
+      // safely be cancelled rather than the customer being blocked forever.
     }
+
     await supabaseAdmin
       .from("shipments")
       .update({ status: "Cancelled", updated_at: new Date().toISOString() })
