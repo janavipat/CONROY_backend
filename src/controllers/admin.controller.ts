@@ -2,6 +2,7 @@ import type { Request, Response } from "express";
 import { supabaseAdmin } from "../lib/supabase.js";
 import { ApiError } from "../middleware/errors.js";
 import { uploadProductImage } from "../lib/storage.js";
+import { stopShipmentsForOrder } from "../lib/shipping/stopShipments.js";
 import {
   adminProductSchema,
   updateReturnStatusSchema,
@@ -403,6 +404,49 @@ export async function getAdminOrder(req: Request, res: Response) {
     .single();
   if (error || !data) throw new ApiError(404, "Order not found.");
   res.json({ ok: true, data: mapAdminOrder(data) });
+}
+
+/**
+ * DELETE /api/admin/orders/:id — removes an order from the store entirely.
+ *
+ * The courier is dealt with first, through the same integration the customer
+ * cancellation uses: deleting locally while a booking is still live would leave
+ * the parcel sitting in Delhivery One with nothing on our side pointing at it,
+ * and the waybill would be unreachable afterwards because the row is gone.
+ * A refusal from Delhivery aborts the delete and leaves the order untouched.
+ *
+ * order_items, shipments, shipment_jobs, shipment_scans and returns are all
+ * declared `on delete cascade`, so the row going is enough to clean up after it.
+ */
+export async function deleteAdminOrder(req: Request, res: Response) {
+  const { id } = req.params;
+
+  // Fetched first so a second click on an already-deleted order is a clean 404
+  // rather than a silent success that looks like it deleted something.
+  const { data: order, error } = await supabaseAdmin
+    .from("orders")
+    .select("id")
+    .eq("id", id)
+    .maybeSingle();
+  if (error) throw new ApiError(500, error.message);
+  if (!order) throw new ApiError(404, "Order not found. It may already have been deleted.");
+
+  const stop = await stopShipmentsForOrder(id);
+  if (stop.blocked) {
+    // Nothing has been written; the order is exactly as the admin left it.
+    throw new ApiError(
+      stop.blocked.status,
+      `${stop.blocked.message} The order has not been deleted.`,
+    );
+  }
+
+  const { error: dErr } = await supabaseAdmin.from("orders").delete().eq("id", id);
+  if (dErr) {
+    console.error(`Admin order delete failed for ${id}:`, dErr.message);
+    throw new ApiError(500, "The shipment was stopped but the order could not be deleted.");
+  }
+
+  res.json({ ok: true, message: "Order deleted.", shipmentsCancelled: stop.stopped.length });
 }
 
 /* ────────────────────────── Admin: customers ────────────────────────────── */

@@ -5,7 +5,7 @@ import { cancelOrderSchema, CANCELLABLE_STATUSES } from "../validators/schemas.j
 import { createOrderSchema } from "../validators/schemas.js";
 import { resolveCart, persistOrder } from "../lib/pricing.js";
 import { computeDiscount } from "../lib/offers.js";
-import { delhiveryProvider } from "../lib/shipping/providers/delhivery/index.js";
+import { stopShipmentsForOrder } from "../lib/shipping/stopShipments.js";
 
 /**
  * POST /api/orders — creates an order; prices are resolved server-side.
@@ -101,83 +101,9 @@ export async function cancelOrder(req: Request, res: Response) {
    * genuine 409, while an unreachable API is a temporary 503 rather than a
    * business rule.
    */
-  // Every shipment row, not one: a re-attempted booking leaves a second
-  // waybill behind, and maybeSingle() would return null for that order and
-  // skip the courier cancellation altogether.
-  const { data: shipmentRows } = await supabaseAdmin
-    .from("shipments")
-    .select("id, waybill, create_response")
-    .eq("order_id", id)
-    .neq("status", "Cancelled");
-
-  type ShipmentRow = { id: string; waybill: string | null; create_response: unknown };
-  const stoppedShipments: string[] = [];
-  for (const shipment of (shipmentRows ?? []) as ShipmentRow[]) {
-    const waybill = shipment.waybill ?? undefined;
-    if (!waybill) continue;
-
-    // A row Delhivery never acknowledged was never really booked, so there is
-    // no pickup to stop — used below to avoid blocking on a stale row.
-    const booked =
-      (shipment.create_response as { success?: boolean } | null)?.success === true;
-    const cancelled = await delhiveryProvider.cancelShipment({ waybill });
-
-    if (!cancelled.ok) {
-      const detail = cancelled.error?.message ?? "";
-      // The raw body is the only way to tell these cases apart after the fact,
-      // so it is logged in full rather than summarised.
-      console.warn(
-        `Delhivery cancel failed for order ${id} (waybill ${waybill}): ${detail}`,
-        JSON.stringify(cancelled.raw),
-      );
-
-      /*
-       * cancelShipment reports every non-Success as "permanent", which means
-       * "do not retry" — not "the parcel has been collected". Treating the two
-       * as the same told customers the courier had their order whenever
-       * Delhivery replied anything other than Success, including for a waybill
-       * it had never heard of.
-       */
-      const says = detail.toLowerCase();
-      const unknownWaybill =
-        says.includes("not found") ||
-        says.includes("does not exist") ||
-        says.includes("no waybill") ||
-        says.includes("invalid waybill");
-      const alreadyCancelled = says.includes("already") && says.includes("cancel");
-      const inTransit =
-        says.includes("picked") ||
-        says.includes("transit") ||
-        says.includes("dispatched") ||
-        says.includes("out for delivery");
-
-      if (inTransit) {
-        // The one case where the parcel really is gone.
-        throw new ApiError(
-          409,
-          "This order is already with the courier and can no longer be cancelled. Please refuse the delivery or start a return once it arrives.",
-        );
-      }
-
-      if (booked && !unknownWaybill && !alreadyCancelled) {
-        // Anything else is unresolved. The order stays exactly as it was so
-        // nothing is marked cancelled while a live shipment could still go out.
-        throw new ApiError(
-          503,
-          "We couldn't confirm the cancellation with the courier. Please try again in a moment.",
-        );
-      }
-
-      // A waybill Delhivery does not recognise, one it has already cancelled,
-      // or a row it never acknowledged in the first place all mean nothing is
-      // going to be collected — so the order can safely be cancelled rather
-      // than the customer being blocked forever by a stale shipment row.
-    }
-
-    // Recorded, not written yet: the order itself is updated first so that a
-    // failure here can never leave the courier cancelled and the order active.
-    stoppedShipments.push(shipment.id);
-  }
+  const stop = await stopShipmentsForOrder(id);
+  if (stop.blocked) throw new ApiError(stop.blocked.status, stop.blocked.message);
+  const stoppedShipments = stop.stopped;
 
   // COD collects on delivery, so nothing was ever charged.
   const isCod = order.status === "cod_pending";
