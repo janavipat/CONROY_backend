@@ -64,7 +64,13 @@ async function completeJob(jobId: string): Promise<void> {
   await supabaseAdmin.from("shipment_jobs").update({ state: "done", locked_at: null }).eq("id", jobId);
 }
 
-async function failJob(job: ShipmentJobRow, message: string, permanent: boolean): Promise<void> {
+async function failJob(
+  job: ShipmentJobRow,
+  message: string,
+  permanent: boolean,
+  /** Skips the backoff — used when the previous attempt never actually ran. */
+  retryNow = false,
+): Promise<void> {
   const attempts = job.attempts + 1;
   if (permanent || attempts >= MAX_ATTEMPTS) {
     await supabaseAdmin
@@ -80,16 +86,22 @@ async function failJob(job: ShipmentJobRow, message: string, permanent: boolean)
       state: "queued",
       attempts,
       last_error: message,
-      next_run_at: new Date(Date.now() + delayMin * 60_000).toISOString(),
+      next_run_at: retryNow
+        ? new Date().toISOString()
+        : new Date(Date.now() + delayMin * 60_000).toISOString(),
       locked_at: null,
     })
     .eq("id", job.id);
 }
 
 /**
- * Resets jobs abandoned mid-attempt back into the normal backoff flow. Must
- * run before claiming due jobs, so a reclaimed job's new next_run_at (~2 min
- * out) has a chance to actually be picked up by a later pass.
+ * Resets jobs abandoned mid-attempt so the pass that reclaims them can also
+ * run them. Backoff exists to space out attempts that actually happened; a
+ * killed attempt never reached Delhivery, so there is nothing to back off
+ * from. Queueing these ~2 minutes out instead meant they were skipped by the
+ * very pass that reclaimed them and had to wait for the next one — which on a
+ * once-a-day cron is a whole day per attempt, so an order could sit unshipped
+ * for ~48h. They are queued as due immediately instead.
  */
 async function reclaimStaleJobs(): Promise<void> {
   const cutoff = new Date(Date.now() - STALE_RUNNING_MINUTES * 60_000).toISOString();
@@ -104,6 +116,7 @@ async function reclaimStaleJobs(): Promise<void> {
       row as ShipmentJobRow,
       "Reclaimed: stuck in 'running' past the stale threshold (the process handling it was likely frozen/killed mid-attempt).",
       false,
+      true,
     );
   }
 }
@@ -170,3 +183,6 @@ export async function runDueShipmentJobs(limit = 25): Promise<{ processed: numbe
   }
   return { processed };
 }
+
+/** Test-only export: exercising reclaim without waiting for a cron pass. */
+export const reclaimStaleJobsForTest = reclaimStaleJobs;
