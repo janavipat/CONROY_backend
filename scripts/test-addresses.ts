@@ -150,9 +150,9 @@ try {
 
   console.log("\n8. Invalid input is rejected with a message");
   const bad = await create(ALICE, { pincode: "abc" });
-  check("bad pincode refused", bad.status, 400, String(bad.error));
+  check("bad pincode refused", bad.status, 422, String(bad.error));
   const blank = await create(ALICE, { line1: "" });
-  check("blank address refused", blank.status, 400, String(blank.error));
+  check("blank address refused", blank.status, 422, String(blank.error));
 
   console.log(`\n${passed} passed, ${failed} failed`);
   if (failed) process.exitCode = 1;
