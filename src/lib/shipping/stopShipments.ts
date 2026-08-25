@@ -109,3 +109,22 @@ export async function stopShipmentsForOrder(orderId: string): Promise<StopShipme
 
   return { stopped };
 }
+
+
+/**
+ * Records that the courier has released these shipments.
+ *
+ * Callers run this only after their own state change has landed, so a failure
+ * here can never leave the courier cancelled and the order still live. It also
+ * makes a repeated delete or cancel a no-op: stopShipmentsForOrder skips rows
+ * already marked Cancelled, so Delhivery is never asked twice for the same
+ * waybill.
+ */
+export async function markShipmentsCancelled(shipmentIds: string[]): Promise<void> {
+  if (!shipmentIds.length) return;
+  const { error } = await supabaseAdmin
+    .from("shipments")
+    .update({ status: "Cancelled", updated_at: new Date().toISOString() })
+    .in("id", shipmentIds);
+  if (error) console.warn("Shipment rows not marked cancelled:", error.message);
+}

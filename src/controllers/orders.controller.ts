@@ -5,7 +5,7 @@ import { cancelOrderSchema, CANCELLABLE_STATUSES } from "../validators/schemas.j
 import { createOrderSchema } from "../validators/schemas.js";
 import { resolveCart, persistOrder } from "../lib/pricing.js";
 import { computeDiscount } from "../lib/offers.js";
-import { stopShipmentsForOrder } from "../lib/shipping/stopShipments.js";
+import { stopShipmentsForOrder, markShipmentsCancelled } from "../lib/shipping/stopShipments.js";
 import { retireCreateJob } from "../services/shipping/jobs.js";
 import { softDeleteReady } from "../lib/softDelete.js";
 
@@ -186,13 +186,7 @@ export async function cancelOrder(req: Request, res: Response) {
 
   // Only once the order is safely cancelled. A failure here is cosmetic: the
   // customer-visible state is already correct.
-  if (stoppedShipments.length) {
-    const { error: sErr } = await supabaseAdmin
-      .from("shipments")
-      .update({ status: "Cancelled", updated_at: new Date().toISOString() })
-      .in("id", stoppedShipments);
-    if (sErr) console.warn(`Shipment rows not marked cancelled for order ${id}:`, sErr.message);
-  }
+  await markShipmentsCancelled(stoppedShipments);
 
   await restoreInventory((order.items as OrderItemRow[]) ?? []);
 

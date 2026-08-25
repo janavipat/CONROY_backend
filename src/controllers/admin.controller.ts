@@ -2,7 +2,7 @@ import type { Request, Response } from "express";
 import { supabaseAdmin } from "../lib/supabase.js";
 import { ApiError } from "../middleware/errors.js";
 import { uploadProductImage } from "../lib/storage.js";
-import { stopShipmentsForOrder } from "../lib/shipping/stopShipments.js";
+import { stopShipmentsForOrder, markShipmentsCancelled } from "../lib/shipping/stopShipments.js";
 import { retireCreateJob } from "../services/shipping/jobs.js";
 import { softDeleteReady } from "../lib/softDelete.js";
 import {
@@ -499,6 +499,13 @@ export async function deleteAdminOrder(req: Request, res: Response) {
     console.error(`Admin order delete failed for ${id}:`, dErr.message);
     throw new ApiError(500, "The shipment was stopped but the order could not be deleted.");
   }
+
+  /*
+   * The courier released these before the order was touched; recording it is
+   * what stops the panel still showing a live waybill, and what makes a second
+   * Delete a no-op instead of a second cancellation request to Delhivery.
+   */
+  await markShipmentsCancelled(stop.stopped);
 
   // A deleted order must never be picked up by the shipment worker later.
   await retireCreateJob(id, "Order moved to Deleted Orders by an admin.");
