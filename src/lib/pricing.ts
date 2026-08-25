@@ -117,7 +117,8 @@ export interface ShipAddress {
 }
 
 export async function persistOrder(params: {
-  email: string;
+  /** Blank when the shopper chose not to give one. Never substituted. */
+  email?: string | null;
   fullName?: string | null;
   phone?: string | null;
   shippingAddress?: string | null;
@@ -137,7 +138,12 @@ export async function persistOrder(params: {
   const { data: order, error: oErr } = await supabaseAdmin
     .from("orders")
     .insert({
-      email: params.email,
+      /*
+       * orders.email is NOT NULL, so an absent address is stored as an empty
+       * string rather than a placeholder — nothing downstream treats it as an
+       * identifier, and a fake address would be worse than none.
+       */
+      email: params.email ?? "",
       full_name: params.fullName ?? null,
       phone: params.phone ?? null,
       shipping_address: params.shippingAddress ?? null,

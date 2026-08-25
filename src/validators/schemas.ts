@@ -32,8 +32,21 @@ export const shipAddressSchema = z.object({
   country: z.string().max(80).optional(),
 });
 
+/**
+ * An email address, or nothing at all. Mirrors the `emailField` used by the
+ * auth schemas: a supplied value must be valid, an omitted or empty one is
+ * accepted as-is rather than being defaulted to anything.
+ */
+export const optionalEmail = z.string().email("Enter a valid email address").optional().or(z.literal(""));
+
 export const createOrderSchema = z.object({
-  email: z.string().email("A valid email is required"),
+  /*
+   * Optional. Delivery needs a phone and an address, not an email, and the
+   * courier never sees one — so requiring it turned a nice-to-have into a
+   * barrier to placing the order. A value that IS supplied still has to be a
+   * real address; blank is simply blank, never a stand-in address.
+   */
+  email: optionalEmail,
   fullName: z.string().min(1).max(160).optional(),
   phone: z.string().max(40).optional(),
   shippingAddress: z.string().max(1000).optional(),
@@ -116,7 +129,8 @@ export const razorpayOrderSchema = z.object({
 // Razorpay: verify a completed payment and place the order. Includes the same
 // order fields as checkout plus the three values Razorpay Checkout returns.
 export const razorpayVerifySchema = z.object({
-  email: z.string().email("A valid email is required"),
+  // Same rule as COD checkout — see createOrderSchema.
+  email: optionalEmail,
   fullName: z.string().min(1).max(160).optional(),
   phone: z.string().max(40).optional(),
   shippingAddress: z.string().max(1000).optional(),

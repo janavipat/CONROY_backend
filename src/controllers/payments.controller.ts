@@ -78,7 +78,7 @@ export async function verifyPayment(req: Request, res: Response) {
   const offer = await computeDiscount(cart.lineItems, cart.subtotal, input.code);
 
   const order = await persistOrder({
-    email: input.email,
+    email: input.email || "",
     fullName: input.fullName,
     phone: input.phone,
     shippingAddress: input.shippingAddress,
