@@ -315,8 +315,30 @@ export const FULFILLMENT_STATUSES = [
   "Cancelled",
 ] as const;
 
-/** Only these early states may still be cancelled by the customer. */
-export const CANCELLABLE_STATUSES = ["Pending", "Confirmed", "Processing"] as const;
+/**
+ * States a customer may still cancel from.
+ *
+ * "Manifested" belongs here. Checkout enqueues a shipment and fires it
+ * immediately, so an order is manifested within seconds of being placed —
+ * which left this list describing a window that had already closed by the time
+ * anyone could act, and every real order answering 409 "can no longer be
+ * cancelled". Manifested means a waybill exists, not that the parcel has been
+ * collected: Delhivery accepts cancellation at this stage and the provider
+ * already implements it.
+ *
+ * The line is drawn at the courier taking possession. From "Shipped" onward
+ * the parcel is in transit and cancellation is genuinely refused.
+ */
+export const CANCELLABLE_STATUSES = [
+  "Pending",
+  "Confirmed",
+  "Processing",
+  // Packed sits before Manifested in the lifecycle above, so leaving it out
+  // while allowing Manifested would refuse an order that is demonstrably
+  // earlier and still on the shelf.
+  "Packed",
+  "Manifested",
+] as const;
 
 export const REFUND_STATUSES = [
   "None",

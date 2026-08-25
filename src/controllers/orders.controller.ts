@@ -5,6 +5,7 @@ import { cancelOrderSchema, CANCELLABLE_STATUSES } from "../validators/schemas.j
 import { createOrderSchema } from "../validators/schemas.js";
 import { resolveCart, persistOrder } from "../lib/pricing.js";
 import { computeDiscount } from "../lib/offers.js";
+import { delhiveryProvider } from "../lib/shipping/providers/delhivery/index.js";
 
 /**
  * POST /api/orders — creates an order; prices are resolved server-side.
@@ -86,6 +87,46 @@ export async function cancelOrder(req: Request, res: Response) {
   }
   if (!CANCELLABLE_STATUSES.includes(fulfillment as (typeof CANCELLABLE_STATUSES)[number])) {
     throw new ApiError(409, "This order can no longer be cancelled.");
+  }
+
+  /*
+   * A manifested order already has a waybill, so the courier is expecting to
+   * collect it. Cancel that first: if the order were marked cancelled while
+   * the shipment stayed live, Delhivery would still pick the parcel up and the
+   * customer would receive an order they had cancelled.
+   *
+   * This runs before the order is touched, so a refusal leaves the order
+   * exactly as it was and the customer can retry. Delhivery classifies its own
+   * failures — a permanent one (the parcel has already been collected) is a
+   * genuine 409, while an unreachable API is a temporary 503 rather than a
+   * business rule.
+   */
+  const { data: shipment } = await supabaseAdmin
+    .from("shipments")
+    .select("id, waybill")
+    .eq("order_id", id)
+    .maybeSingle();
+
+  const waybill = shipment?.waybill as string | undefined;
+  if (waybill) {
+    const cancelled = await delhiveryProvider.cancelShipment({ waybill });
+    if (!cancelled.ok) {
+      const permanent = cancelled.error?.classification === "permanent";
+      console.warn(
+        `Shipment cancel refused for order ${id} (waybill ${waybill}):`,
+        cancelled.error?.message,
+      );
+      throw new ApiError(
+        permanent ? 409 : 503,
+        permanent
+          ? "This order is already with the courier and can no longer be cancelled. Please refuse the delivery or start a return once it arrives."
+          : "We couldn't reach the courier to cancel the shipment. Please try again in a moment.",
+      );
+    }
+    await supabaseAdmin
+      .from("shipments")
+      .update({ status: "Cancelled", updated_at: new Date().toISOString() })
+      .eq("id", shipment!.id);
   }
 
   // COD collects on delivery, so nothing was ever charged.
