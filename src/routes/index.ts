@@ -16,7 +16,13 @@ import {
   listNotifications,
   markNotificationsRead,
 } from "../controllers/notifications.controller.js";
-import { listAddresses, saveAddresses } from "../controllers/address.controller.js";
+import {
+  listAddresses,
+  createAddress,
+  updateAddress,
+  setDefaultAddress,
+  deleteAddress,
+} from "../controllers/address.controller.js";
 import { getProduct, listProducts } from "../controllers/products.controller.js";
 import {
   getCollection,
@@ -132,7 +138,10 @@ router.post("/chat", asyncHandler(submitChat));
 
 // Saved delivery addresses (per customer, keyed by phone)
 router.get("/addresses", asyncHandler(listAddresses));
-router.put("/addresses", asyncHandler(saveAddresses));
+router.post("/addresses", asyncHandler(createAddress));
+router.patch("/addresses/:id", asyncHandler(updateAddress));
+router.post("/addresses/:id/default", asyncHandler(setDefaultAddress));
+router.delete("/addresses/:id", asyncHandler(deleteAddress));
 
 // Cron entrypoint — protected by CRON_SECRET (checked inside the handler,
 // not requireAdmin, since Vercel Cron authenticates differently). GET, not
