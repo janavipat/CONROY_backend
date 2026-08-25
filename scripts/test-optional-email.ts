@@ -100,7 +100,10 @@ try {
   console.log("\nC. Invalid email → rejected with a validation error");
   {
     const r = await placeOrder("not-an-email", "cod", product.handle, size);
-    check("rejected", r.status, 400, JSON.stringify(r.body).slice(0, 200));
+    // 422 is this API's validation status (see middleware/errors.ts).
+    check("rejected", r.status, 422, JSON.stringify(r.body).slice(0, 200));
+    const details = (r.body.details as { path?: string; message?: string }[] | undefined) ?? [];
+    check("error names the email field", details[0]?.path, "email");
     check("order not created", r.id, undefined);
   }
 
@@ -167,7 +170,7 @@ try {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ items: [] }),
     });
-    check("empty order rejected", res.status, 400);
+    check("empty order rejected", res.status, 422);
   }
 
   console.log(`\n${passed} passed, ${failed} failed`);
