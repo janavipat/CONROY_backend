@@ -1,5 +1,6 @@
 import { env } from "../../../../config/env.js";
 import { delhiveryPostForm, delhiveryPostJson } from "./client.js";
+import { trackShipment } from "./tracking.js";
 import type {
   CancelShipmentInput,
   CancelShipmentResult,
@@ -100,8 +101,17 @@ export async function createShipment(input: CreateShipmentInput): Promise<Create
 }
 
 interface DelhiveryEditResponse {
-  status?: string;
+  /** Delhivery replies with the string "Success"/"Failure" here on some
+   *  accounts and a boolean on others, so both shapes must be handled. */
+  status?: string | boolean;
   error?: string;
+}
+
+/** True for every shape /api/p/edit uses to report a successful cancellation. */
+export function editSucceeded(body: DelhiveryEditResponse | null): boolean {
+  const status = body?.status;
+  if (status === true) return true;
+  return typeof status === "string" && status.trim().toLowerCase() === "success";
 }
 
 /**
@@ -117,13 +127,27 @@ export async function cancelShipment(input: CancelShipmentInput): Promise<Cancel
 
   if (!res.ok) return { ok: false, raw: res.body ?? res.bodyText, error: res.error };
 
-  if (res.body?.status !== "Success") {
-    return {
-      ok: false,
-      raw: res.body,
-      error: { message: res.body?.error || "Delhivery did not confirm the cancellation.", classification: "permanent" },
-    };
+  if (editSucceeded(res.body)) return { ok: true, raw: res.body };
+
+  /*
+   * Delhivery has been observed cancelling the shipment and then replying in a
+   * shape this endpoint didn't recognise as success, which left the parcel
+   * cancelled at the courier while the order stayed active on the site.
+   * Never report a failure without first asking Delhivery what the shipment's
+   * actual state is.
+   */
+  const tracked = await trackShipment({ waybill: input.waybill });
+  const cancelledAtCourier = tracked.ok && tracked.events.some((e) => e.status === "Cancelled");
+  if (cancelledAtCourier) {
+    return { ok: true, raw: { edit: res.body, tracking: tracked.raw } };
   }
 
-  return { ok: true, raw: res.body };
+  return {
+    ok: false,
+    raw: { edit: res.body, tracking: tracked.raw },
+    error: {
+      message: res.body?.error || "Delhivery did not confirm the cancellation.",
+      classification: "permanent",
+    },
+  };
 }

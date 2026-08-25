@@ -111,6 +111,7 @@ export async function cancelOrder(req: Request, res: Response) {
     .neq("status", "Cancelled");
 
   type ShipmentRow = { id: string; waybill: string | null; create_response: unknown };
+  const stoppedShipments: string[] = [];
   for (const shipment of (shipmentRows ?? []) as ShipmentRow[]) {
     const waybill = shipment.waybill ?? undefined;
     if (!waybill) continue;
@@ -173,10 +174,9 @@ export async function cancelOrder(req: Request, res: Response) {
       // than the customer being blocked forever by a stale shipment row.
     }
 
-    await supabaseAdmin
-      .from("shipments")
-      .update({ status: "Cancelled", updated_at: new Date().toISOString() })
-      .eq("id", shipment.id);
+    // Recorded, not written yet: the order itself is updated first so that a
+    // failure here can never leave the courier cancelled and the order active.
+    stoppedShipments.push(shipment.id);
   }
 
   // COD collects on delivery, so nothing was ever charged.
@@ -187,26 +187,71 @@ export async function cancelOrder(req: Request, res: Response) {
     ? `${input.reason}: ${input.customReason.trim()}`
     : input.reason;
 
-  const { data: updated, error: uErr } = await supabaseAdmin
-    .from("orders")
-    .update({
-      fulfillment_status: "Cancelled",
-      // Keep the payment state in step so revenue/analytics exclude it.
-      status: "cancelled",
-      cancel_reason: reason,
-      cancelled_at: new Date().toISOString(),
-      cancelled_by: "customer",
-      refund_status: refundStatus,
-    })
-    .eq("id", id)
-    .select("*, items:order_items(*)")
-    .single();
+  /*
+   * The courier has now stopped the parcel, so the order MUST end up cancelled;
+   * leaving it active is the one outcome that strands a customer with a
+   * cancelled shipment against a live order. A transient write failure is
+   * retried once before anything is reported as broken.
+   */
+  const patch = {
+    fulfillment_status: "Cancelled",
+    // Keep the payment state in step so revenue/analytics exclude it.
+    status: "cancelled",
+    cancel_reason: reason,
+    cancelled_at: new Date().toISOString(),
+    cancelled_by: "customer",
+    refund_status: refundStatus,
+  };
+
+  let updated: unknown = null;
+  let uErr: { message: string } | null = null;
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    const result = await supabaseAdmin
+      .from("orders")
+      .update(patch)
+      .eq("id", id)
+      .select("*, items:order_items(*)")
+      .single();
+    updated = result.data;
+    uErr = result.error;
+    if (!uErr) break;
+    console.warn(`Order cancel write attempt ${attempt} failed for ${id}: ${uErr.message}`);
+  }
+
   if (uErr) {
     // Never leak Postgres/PostgREST internals to a shopper — log the real
     // cause (e.g. "column ... does not exist" when cancel-order.sql hasn't
     // been run yet) and return the customer-facing message.
     console.error("Order cancellation failed:", uErr.message);
+
+    if (stoppedShipments.length) {
+      // The parcel is stopped but the order is still live. Record it so the
+      // mismatch is visible and recoverable instead of silently persisting.
+      console.error(
+        `RECONCILE REQUIRED: order ${id} has shipments cancelled at the courier but was not marked cancelled.`,
+      );
+      await supabaseAdmin
+        .from("shipment_jobs")
+        .upsert({ order_id: id, kind: "reconcile", state: "queued", last_error: uErr.message }, {
+          onConflict: "order_id,kind",
+        });
+      throw new ApiError(
+        500,
+        "Your shipment was stopped but we couldn't finish cancelling the order. Our team has been notified — please contact support before reordering.",
+      );
+    }
+
     throw new ApiError(500, "Unable to cancel your order. Please try again.");
+  }
+
+  // Only once the order is safely cancelled. A failure here is cosmetic: the
+  // customer-visible state is already correct.
+  if (stoppedShipments.length) {
+    const { error: sErr } = await supabaseAdmin
+      .from("shipments")
+      .update({ status: "Cancelled", updated_at: new Date().toISOString() })
+      .in("id", stoppedShipments);
+    if (sErr) console.warn(`Shipment rows not marked cancelled for order ${id}:`, sErr.message);
   }
 
   await restoreInventory((order.items as OrderItemRow[]) ?? []);

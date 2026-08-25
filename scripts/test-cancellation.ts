@@ -155,7 +155,67 @@ try {
     String(prepaidState.refund_status),
   );
 
+  console.log("\n7. Courier stop succeeds → DB cancelled → customer refetch shows Cancelled");
+  {
+    const id = await makeOrder("cod_pending", "Manifested");
+    await attachShipment(id, false);
+
+    const res = await fetch(`${API}/orders/${id}/cancel`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ phone: PHONE, reason: "Ordered by mistake" }),
+    });
+    const body = (await res.json().catch(() => ({}))) as Record<string, unknown>;
+    check("cancel accepted", res.status, 200, String(body.error ?? ""));
+
+    // The exact shape the frontend reads: { success, message, order }.
+    check("response.success", body.success === true ? 1 : 0, 1);
+    check("response.message present", body.message ? 1 : 0, 1);
+    const returned = body.order as Record<string, string> | undefined;
+    check("response.order present", returned ? 1 : 0, 1);
+    check(
+      "response.order is Cancelled",
+      returned?.fulfillment_status === "Cancelled" ? 1 : 0,
+      1,
+      String(returned?.fulfillment_status),
+    );
+
+    // Database is the source of truth.
+    const db = await stateOf(id);
+    check("db status cancelled", db.status === "cancelled" ? 1 : 0, 1, String(db.status));
+    check("db fulfilment Cancelled", db.fulfillment_status === "Cancelled" ? 1 : 0, 1);
+    check("db reason saved", db.cancel_reason ? 1 : 0, 1);
+    check("db cancelled_at saved", db.cancelled_at ? 1 : 0, 1);
+    check("db cancelled_by customer", db.cancelled_by === "customer" ? 1 : 0, 1);
+
+    // Shipment row is written after the order, never before.
+    const { data: ship } = await supabaseAdmin
+      .from("shipments")
+      .select("status")
+      .eq("order_id", id)
+      .single();
+    check(
+      "shipment row Cancelled",
+      (ship as { status?: string } | null)?.status === "Cancelled" ? 1 : 0,
+      1,
+      JSON.stringify(ship),
+    );
+
+    // What the customer page actually calls on refresh (MyOrders → load()).
+    const listRes = await fetch(`${API}/orders?phone=${encodeURIComponent(PHONE)}`);
+    const list = (await listRes.json()) as { data?: Record<string, string>[] };
+    const refetched = (list.data ?? []).find((o) => o.id === id);
+    check("refetch returns order", refetched ? 1 : 0, 1);
+    check(
+      "refetch shows Cancelled",
+      refetched?.fulfillment_status === "Cancelled" ? 1 : 0,
+      1,
+      String(refetched?.fulfillment_status),
+    );
+  }
+
   console.log(`\n${passed} passed, ${failed} failed`);
+  if (failed) process.exitCode = 1;
 } finally {
   for (const id of shipments) await supabaseAdmin.from("shipments").delete().eq("id", id);
   for (const id of orders) await supabaseAdmin.from("orders").delete().eq("id", id);
