@@ -108,13 +108,18 @@ async function shipmentRows(id: string) {
   return (data ?? []) as { id: string; waybill: string | null; status: string }[];
 }
 
+/**
+ * Cancels through the API — that is what releases the waybill at Delhivery —
+ * then removes the row directly. Deleting through the admin endpoint is a soft
+ * delete, which would leave these test orders sitting in the database.
+ */
 async function cancelAndDelete(id: string) {
   await fetch(`${API}/orders/${id}/cancel`, {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ phone: PHONE, reason: "Ordered by mistake" }),
   });
-  await fetch(`${API}/admin/orders/${id}`, { method: "DELETE", headers: ADMIN });
+  await supabaseAdmin.from("orders").delete().eq("id", id);
 }
 
 try {

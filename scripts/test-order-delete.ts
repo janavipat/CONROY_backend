@@ -2,17 +2,22 @@ import { supabaseAdmin } from "../src/lib/supabase.js";
 import { env } from "../src/config/env.js";
 
 /**
- * Admin order deletion, end to end against the deployed API.
+ * The courier side of deleting an order.
  *
- * Every order and shipment is created and removed by this script. No real
- * customer order is touched and no real waybill is ever sent to Delhivery —
- * the waybills here are synthetic and outside the issued range.
+ * Deleting is a soft delete now (see test-soft-delete.ts for the section, the
+ * restore and the permanent removal); what this covers is the part that talks
+ * to Delhivery — a live booking must be stopped before an order leaves the
+ * lists, and a courier refusal must leave the order exactly as it was.
+ *
+ * Every order and shipment is created and removed here. Waybills are synthetic
+ * and outside the issued range, so nothing real is ever cancelled.
+ *
+ * Requires supabase/soft-delete-orders.sql.
  */
 
 const API = process.env.TEST_API ?? "https://conroy-backend.vercel.app/api";
-const PHONE = "+910000000021";
-const MARK = "__deletetest__";
 const ADMIN = { "x-admin-key": env.ADMIN_KEY ?? "" };
+const MARK = "__deletetest__";
 
 const orders: string[] = [];
 let passed = 0;
@@ -35,7 +40,7 @@ async function makeOrder(fulfillment = "Pending") {
     .insert({
       email: `${MARK}@example.invalid`,
       full_name: MARK,
-      phone: PHONE,
+      phone: "+910000000071",
       shipping_address: MARK,
       subtotal: 999,
       currency: "INR",
@@ -50,7 +55,10 @@ async function makeOrder(fulfillment = "Pending") {
   return id;
 }
 
-/** @param booked mimics a shipment Delhivery acknowledged (`success: true`). */
+/**
+ * @param booked mimics a shipment Delhivery acknowledged. A booked row with a
+ *   waybill Delhivery cannot recognise is how the refusal path is reached.
+ */
 async function attachShipment(orderId: string, booked: boolean, status = "Success") {
   seq++;
   const { error } = await supabaseAdmin.from("shipments").insert({
@@ -64,15 +72,11 @@ async function attachShipment(orderId: string, booked: boolean, status = "Succes
   if (error) throw new Error(error.message);
 }
 
-async function del(id: string) {
-  const res = await fetch(`${API}/admin/orders/${id}`, { method: "DELETE", headers: ADMIN });
-  const body = (await res.json().catch(() => ({}))) as Record<string, unknown>;
-  return { status: res.status, error: String(body.error ?? ""), body };
-}
+const del = (id: string) => fetch(`${API}/admin/orders/${id}`, { method: "DELETE", headers: ADMIN });
 
-async function exists(id: string) {
-  const { data } = await supabaseAdmin.from("orders").select("id").eq("id", id).maybeSingle();
-  return Boolean(data);
+async function deletedAt(id: string) {
+  const { data } = await supabaseAdmin.from("orders").select("deleted_at").eq("id", id).maybeSingle();
+  return (data as { deleted_at: string | null } | null)?.deleted_at ?? null;
 }
 
 async function shipmentCount(id: string) {
@@ -86,68 +90,52 @@ async function shipmentCount(id: string) {
 try {
   console.log(`API: ${API}\n`);
 
-  console.log("1. Order without shipment → local delete works");
+  const probe = await supabaseAdmin.from("orders").select("deleted_at").limit(1);
+  if (probe.error) {
+    console.log("MIGRATION NOT APPLIED — run supabase/soft-delete-orders.sql first.");
+    process.exitCode = 1;
+    throw new Error("migration missing");
+  }
+
+  console.log("1. Order with no shipment → deletes cleanly");
   {
     const id = await makeOrder();
     const r = await del(id);
-    check("delete accepted", r.status, 200, r.error);
-    check("row gone", await exists(id), false);
+    check("delete accepted", r.status, 200, await r.clone().text());
+    check("marked deleted", Boolean(await deletedAt(id)), true);
   }
 
-  console.log("\n2. Order with a Delhivery shipment → shipment handled, then order deleted");
+  console.log("\n2. Order whose booking the courier releases → deletes, record kept");
   {
     const id = await makeOrder("Manifested");
-    await attachShipment(id, false); // courier releases it
+    await attachShipment(id, false); // never acknowledged, so nothing to stop
     const r = await del(id);
-    check("delete accepted", r.status, 200, r.error);
-    check("order gone", await exists(id), false);
-    check("shipment rows cascaded", await shipmentCount(id), 0);
+    check("delete accepted", r.status, 200, await r.clone().text());
+    check("marked deleted", Boolean(await deletedAt(id)), true);
+    // The point of soft delete: the shipment record survives for the audit
+    // trail instead of cascading away with the row.
+    check("shipment record kept", await shipmentCount(id), 1);
   }
 
-  console.log("\n3. Delhivery refuses → local order left untouched");
+  console.log("\n3. Courier refuses → order left completely untouched");
   {
     const id = await makeOrder("Manifested");
-    await attachShipment(id, true); // booked; Delhivery will not release a fake waybill
+    await attachShipment(id, true); // booked; Delhivery will not release it
     const r = await del(id);
-    check("delete refused", r.status, 503, r.error);
-    check("says not deleted", r.error.includes("has not been deleted"), true, r.error);
-    check("order still present", await exists(id), true);
-    check("shipment still present", await shipmentCount(id), 1);
+    check("delete refused", r.status, 503, await r.clone().text());
+    const body = (await r.json().catch(() => ({}))) as { error?: string };
+    check("says not deleted", body.error?.includes("has not been deleted") ?? false, true, String(body.error));
+    check("not marked deleted", await deletedAt(id), null);
+    check("shipment untouched", await shipmentCount(id), 1);
   }
 
-  console.log("\n4. Already-cancelled Delhivery shipment → delete succeeds");
+  console.log("\n4. Shipment already cancelled → delete proceeds");
   {
     const id = await makeOrder("Manifested");
-    // A row already cancelled locally is skipped by the courier step entirely.
-    await attachShipment(id, true, "Cancelled");
+    await attachShipment(id, true, "Cancelled"); // skipped by the courier step
     const r = await del(id);
-    check("delete accepted", r.status, 200, r.error);
-    check("order gone", await exists(id), false);
-  }
-
-  console.log("\n5. Deleted order disappears from customer site and admin list");
-  {
-    const id = await makeOrder();
-    await del(id);
-
-    const mine = await fetch(`${API}/orders?phone=${encodeURIComponent(PHONE)}`);
-    const list = (await mine.json()) as { data?: { id: string }[] };
-    check("absent from customer orders", (list.data ?? []).some((o) => o.id === id), false);
-
-    const cust = await fetch(`${API}/orders/${id}`);
-    check("customer order detail 404s", cust.status, 404);
-
-    const adminRes = await fetch(`${API}/admin/orders`, { headers: ADMIN });
-    const admin = (await adminRes.json()) as { data?: { id: string }[] };
-    check("absent from admin list", (admin.data ?? []).some((o) => o.id === id), false);
-  }
-
-  console.log("\n6. Double deletion is refused, not silently repeated");
-  {
-    const id = await makeOrder();
-    check("first delete", (await del(id)).status, 200);
-    const second = await del(id);
-    check("second delete 404s", second.status, 404, second.error);
+    check("delete accepted", r.status, 200, await r.clone().text());
+    check("marked deleted", Boolean(await deletedAt(id)), true);
   }
 
   console.log(`\n${passed} passed, ${failed} failed`);
