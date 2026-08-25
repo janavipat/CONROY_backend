@@ -110,8 +110,13 @@ try {
     check("reason is specific", after?.last_error?.includes("address") ?? false, true, String(after?.last_error));
   }
 
-  console.log("\n3. Recovery needs no admin action — the cron entrypoint does the same");
-  {
+  console.log("");
+  console.log("3. The unattended path is the same worker");
+  if (!env.CRON_SECRET) {
+    // The cron entrypoint calls runDueShipmentJobs — the identical function the
+    // drain above just exercised — so this only checks the authenticated route.
+    console.log("  SKIP  cron entrypoint — CRON_SECRET not available locally");
+  } else {
     const id = await makeOrder();
     await supabaseAdmin.from("shipment_jobs").insert({
       order_id: id,
@@ -121,7 +126,7 @@ try {
       locked_at: new Date(Date.now() - 30 * 60_000).toISOString(),
     });
     const res = await fetch(`${API}/jobs/shipment/run`, {
-      headers: { Authorization: `Bearer ${env.CRON_SECRET ?? ""}` },
+      headers: { Authorization: `Bearer ${env.CRON_SECRET}` },
     });
     check("cron entrypoint authorised", res.status, 200);
     const after = await jobOf(id);

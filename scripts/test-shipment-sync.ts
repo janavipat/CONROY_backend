@@ -164,24 +164,73 @@ try {
     check("different waybill", paidRow?.waybill !== codRow?.waybill, true);
   }
 
-  console.log("\n4. A cancelled order is never handed to the courier");
-  const cancelId = await placeOrder("cod", product.handle);
-  await fetch(`${API}/orders/${cancelId}/cancel`, {
-    method: "PATCH",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ phone: PHONE, reason: "Ordered by mistake" }),
-  });
-  const { data: killed } = await supabaseAdmin
-    .from("shipment_jobs")
-    .select("state, last_error")
-    .eq("order_id", cancelId)
-    .eq("kind", "create")
-    .maybeSingle();
-  check("create job retired", (killed as { state?: string } | null)?.state, "dead");
+  console.log("\n4a. Cancelling a manifested order cancels it at Delhivery too");
+  {
+    const res = await fetch(`${API}/orders/${codId}/cancel`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ phone: PHONE, reason: "Ordered by mistake" }),
+    });
+    check("cancel accepted", res.status, 200);
 
-  await drain();
-  const afterDrain = await shipmentRows(cancelId);
-  check("no waybill booked", afterDrain.every((s) => !s.waybill), true, JSON.stringify(afterDrain));
+    const row = await adminRow(codId);
+    check("order shows cancelled", row?.fulfillmentStatus, "Cancelled");
+    check("shipment row cancelled", (await shipmentRows(codId))[0]?.status, "Cancelled");
+
+    // The courier's own view, not our record of it.
+    const t = await fetch(`${API}/admin/orders/${codId}/shipment/track`, { headers: ADMIN });
+    const tracked = (await t.json()) as { data?: Record<string, unknown> };
+    console.log(`       Delhivery reports: ${JSON.stringify(tracked.data?.courierStatus)}`);
+    check("waybill still queryable at courier", Boolean(tracked.data?.waybill), true);
+  }
+
+  console.log("\n4b. An order cancelled before its job runs is never booked");
+  {
+    // Built directly: checkout now manifests synchronously, so this is the
+    // only way to hold a create job open long enough to cancel underneath it.
+    const { data } = await supabaseAdmin
+      .from("orders")
+      .insert({
+        email: `${MARK}@example.invalid`,
+        full_name: MARK,
+        phone: PHONE,
+        shipping_address: MARK,
+        subtotal: 999,
+        currency: "INR",
+        status: "cod_pending",
+        fulfillment_status: "Pending",
+        ship_name: SHIP.name,
+        ship_phone: SHIP.phone,
+        ship_line1: SHIP.line1,
+        ship_city: SHIP.city,
+        ship_state: SHIP.state,
+        ship_pincode: SHIP.pincode,
+      })
+      .select("id")
+      .single();
+    const pendingId = String((data as { id: string }).id);
+    created.push(pendingId);
+    await supabaseAdmin.from("shipment_jobs").insert({ order_id: pendingId, kind: "create" });
+
+    const cancelRes = await fetch(`${API}/orders/${pendingId}/cancel`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ phone: PHONE, reason: "Ordered by mistake" }),
+    });
+    check("cancel accepted", cancelRes.status, 200);
+
+    const { data: killed } = await supabaseAdmin
+      .from("shipment_jobs")
+      .select("state")
+      .eq("order_id", pendingId)
+      .eq("kind", "create")
+      .maybeSingle();
+    check("create job retired", (killed as { state?: string } | null)?.state, "dead");
+
+    await drain();
+    const after = await shipmentRows(pendingId);
+    check("no waybill ever booked", after.every((s) => !s.waybill), true, JSON.stringify(after));
+  }
 
   console.log("\n5. An order the courier can never accept fails loudly, not silently");
   {
