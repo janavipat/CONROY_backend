@@ -309,8 +309,33 @@ export async function deleteProduct(req: Request, res: Response) {
 
 /* ─────────────────────────── Admin: orders ──────────────────────────────── */
 
-function paymentMethodOf(status: string): string {
-  return status === "cod_pending" ? "Cash on Delivery" : "Online";
+/**
+ * How the order was paid for, read from the payment record rather than the
+ * status.
+ *
+ * `status` is overwritten with "cancelled" when a customer cancels, so a
+ * cancelled COD order stopped matching "cod_pending" and fell through to
+ * "Online" — telling the admin a refund was owed on money that was never
+ * collected. `payment_provider` is written only on the Razorpay path, so it
+ * survives cancellation and says what actually happened.
+ *
+ * The status check stays as a fallback for rows written before
+ * payments.sql added the column.
+ */
+function paymentMethodOf(
+  status: string,
+  paymentProvider?: string | null,
+  refundStatus?: string | null,
+): string {
+  // Written only on the Razorpay path, and never cleared.
+  if (paymentProvider) return "Online";
+  // A refund only ever exists against money that was actually taken, so any
+  // refund state other than "None" means the order was prepaid.
+  if (refundStatus && refundStatus !== "None") return "Online";
+  if (status === "cod_pending" || status === "cancelled") return "Cash on Delivery";
+  // "paid" with no provider recorded: a row written before payments.sql added
+  // the column. Money was taken, so it was online.
+  return status === "paid" ? "Online" : "Cash on Delivery";
 }
 
 /** GET /api/admin/orders — every order with items + customer + payment method. */
@@ -341,7 +366,28 @@ function mapAdminOrder(o: Record<string, unknown>) {
     offerCode: (o.offer_code as string) || null,
     currency: (o.currency as string) || "INR",
     status: o.status as string,
-    paymentMethod: paymentMethodOf(o.status as string),
+    paymentMethod: paymentMethodOf(
+      o.status as string,
+      o.payment_provider as string | null,
+      o.refund_status as string | null,
+    ),
+    /*
+     * Delivery state and the cancellation record.
+     *
+     * None of this was mapped, so the admin API answered with the payment
+     * status and nothing else — the order detail page had no reason, no
+     * timestamp, no actor and no refund state to show, and could only infer
+     * "cancelled" from the payment status having been overwritten.
+     *
+     * Kept separate from `status` on purpose: payment and fulfilment are
+     * different questions, and a cancelled COD order has a refund status of
+     * "None" precisely because nothing was ever collected.
+     */
+    fulfillmentStatus: (o.fulfillment_status as string) || "Pending",
+    refundStatus: (o.refund_status as string) || "None",
+    cancelReason: (o.cancel_reason as string) || null,
+    cancelledAt: (o.cancelled_at as string) || null,
+    cancelledBy: (o.cancelled_by as string) || null,
     createdAt: o.created_at as string,
     items: (o.items as unknown[]) ?? [],
   };
