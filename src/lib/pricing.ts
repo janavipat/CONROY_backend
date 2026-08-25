@@ -3,6 +3,13 @@ import { ApiError } from "../middleware/errors.js";
 import { enqueueCreateShipmentJob, fireShipmentJobNow } from "../services/shipping/jobs.js";
 
 /**
+ * How long checkout will wait for the courier before handing the shipment
+ * back to the retry queue. Comfortably above a normal manifest (a few
+ * seconds) and well inside the platform request budget.
+ */
+const CHECKOUT_SHIPMENT_WAIT_MS = 10_000;
+
+/**
  * The saving on a product, as a whole percentage of its original price.
  *
  * Lives here rather than in a template so every surface — product grids, the
@@ -202,15 +209,27 @@ export async function persistOrder(params: {
     }
   }
 
-  // Auto-ship: paid and COD orders are both confirmed, ready-to-fulfil orders
-  // — enqueue a create job, then try it immediately, NOT awaited (checkout
-  // must never wait on Delhivery — observed live 2026-08-09 taking ~2
-  // minutes end-to-end on one order, so even fireShipmentJobNow's own 8s
-  // internal timeout wouldn't help here; the real safety net is
-  // reclaimStaleJobs() + the daily cron, not making checkout wait).
+  /*
+   * Auto-ship: paid and COD orders are both confirmed, ready-to-fulfil orders.
+   *
+   * The attempt is awaited up to a bound rather than left to run loose. Not
+   * awaiting it at all is what stranded orders in practice: once checkout has
+   * responded the platform freezes the function, so the Delhivery call died
+   * part-way and the job sat at 'running' with nothing recording a result —
+   * roughly two in five orders never reached the courier. Manifesting normally
+   * takes a few seconds, so most orders now have their waybill before the
+   * customer sees the confirmation.
+   *
+   * The bound is what keeps a slow courier from holding checkout open. If it
+   * expires the order is still returned immediately and the job is left to the
+   * queue, which retries it — the shipment is never lost, only delayed.
+   */
   if (params.status === "paid" || params.status === "cod_pending") {
     await enqueueCreateShipmentJob(order.id as string);
-    void fireShipmentJobNow(order.id as string);
+    await Promise.race([
+      fireShipmentJobNow(order.id as string),
+      new Promise((resolve) => setTimeout(resolve, CHECKOUT_SHIPMENT_WAIT_MS)),
+    ]);
   }
 
   return { ...order, ...shipFields, discount, offer_code: params.offerCode ?? null, items: cart.lineItems };

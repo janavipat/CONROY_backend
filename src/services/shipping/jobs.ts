@@ -184,8 +184,6 @@ export async function runDueShipmentJobs(limit = 25): Promise<{ processed: numbe
   return { processed };
 }
 
-/** Test-only export: exercising reclaim without waiting for a cron pass. */
-export const reclaimStaleJobsForTest = reclaimStaleJobs;
 
 /**
  * Retires an order's pending "create" job so it can never run later.

@@ -17,6 +17,13 @@ export interface DelhiveryResponse<T = unknown> {
   error?: ShippingError;
 }
 
+/**
+ * Deadline for a single Delhivery call. Generous — manifesting one order has
+ * been seen taking several seconds — but bounded, so a stalled call fails as a
+ * retryable error rather than hanging until the platform kills the process.
+ */
+const REQUEST_TIMEOUT_MS = 20_000;
+
 const NOT_CONFIGURED: ShippingError = {
   message: "Delhivery is not configured (DELHIVERY_API_URL/API_TOKEN/CLIENT_NAME/PICKUP_LOCATION).",
   classification: "permanent",
@@ -96,6 +103,14 @@ async function runRequest<T>(
         ...(init.contentType ? { "Content-Type": init.contentType } : {}),
       },
       body: init.body,
+      /*
+       * Without a deadline this fetch can hang for as long as the platform
+       * allows, which is how a create job ended up stranded at 'running': the
+       * function was killed mid-call, so nothing ever recorded a result. An
+       * abort surfaces as a transient network error instead, which the job
+       * worker knows how to retry.
+       */
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
     });
   } catch (err) {
     return { ok: false, status: 0, body: null, bodyText: "", error: classifyNetworkError(err) };
