@@ -737,7 +737,14 @@ export async function getStats(_req: Request, res: Response) {
   const netOf = (o: Record<string, unknown>) =>
     ((o.subtotal as number) ?? 0) - ((o.discount as number) ?? 0);
 
-  const revenue = orders.reduce((sum, o) => sum + netOf(o), 0);
+  /*
+   * Revenue is what the store actually billed: net of discounts, and excluding
+   * cancelled orders — nothing was collected on those, and counting them left
+   * the dashboard disagreeing with the Orders page, which already excluded them.
+   */
+  const revenue = orders
+    .filter((o) => o.status !== "cancelled")
+    .reduce((sum, o) => sum + netOf(o), 0);
   const paidCount = orders.filter((o) => o.status === "paid").length;
   const codCount = orders.filter((o) => o.status === "cod_pending").length;
   const recentOrders = orders.slice(0, 6).map((o) => ({
