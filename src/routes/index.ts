@@ -53,7 +53,13 @@ import {
   getAbandonedCustomers,
 } from "../controllers/analytics.controller.js";
 import { toggleLike, listLikes } from "../controllers/wishlist.controller.js";
-import { whatsappHealth, whatsappTest } from "../controllers/whatsappHealth.controller.js";
+import {
+  whatsappHealth,
+  whatsappTest,
+  whatsappTemplates,
+  whatsappNotifyTest,
+  orderWhatsappLog,
+} from "../controllers/whatsappHealth.controller.js";
 import {
   cancelOrder,
   createOrder,
@@ -227,12 +233,20 @@ router.get("/admin/analytics", asyncHandler(getAnalytics));
 router.get("/admin/abandoned", asyncHandler(getAbandonedCustomers));
 router.get("/admin/whatsapp/health", asyncHandler(whatsappHealth));
 router.post("/admin/whatsapp/test", asyncHandler(whatsappTest));
+// Verifies each order/refund template against what Meta actually has approved
+// (name, language, status, variable count) — a mismatch is otherwise only
+// discovered when a real customer misses a real message.
+router.get("/admin/whatsapp/templates", asyncHandler(whatsappTemplates));
+// Sends one lifecycle template with sample values, to any number.
+router.post("/admin/whatsapp/notify-test", asyncHandler(whatsappNotifyTest));
 router.get("/admin/orders", asyncHandler(listAllOrders));
 router.get("/admin/orders/deleted", asyncHandler(listDeletedOrders));
 router.get("/admin/orders/:id", asyncHandler(getAdminOrder));
 router.delete("/admin/orders/:id", asyncHandler(deleteAdminOrder));
 router.post("/admin/orders/:id/restore", asyncHandler(restoreAdminOrder));
 router.delete("/admin/orders/:id/permanent", asyncHandler(purgeAdminOrder));
+// Every WhatsApp message sent (or skipped, or failed) for one order.
+router.get("/admin/orders/:id/notifications", asyncHandler(orderWhatsappLog));
 router.get("/admin/orders/:orderId/shipment", asyncHandler(getShipmentForOrder));
 router.get("/admin/orders/:orderId/shipment/track", asyncHandler(trackShipmentForOrder));
 router.post("/admin/shipments/drain", asyncHandler(drainShipmentJobs));

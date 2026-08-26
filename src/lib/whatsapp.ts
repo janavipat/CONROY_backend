@@ -12,6 +12,16 @@ export const whatsappConfigured = Boolean(
   env.WHATSAPP_ACCESS_TOKEN && env.WHATSAPP_PHONE_NUMBER_ID && env.WHATSAPP_TEMPLATE_NAME,
 );
 
+/**
+ * True once a template message can be sent at all — i.e. a token and a sender.
+ * Unlike `whatsappConfigured` this does NOT require the OTP template name, so
+ * the order/refund notifications work on a deployment that never enabled
+ * WhatsApp OTP.
+ */
+export const whatsappSenderConfigured = Boolean(
+  env.WHATSAPP_ACCESS_TOKEN && env.WHATSAPP_PHONE_NUMBER_ID,
+);
+
 const GRAPH_VERSION = "v21.0";
 
 /** Network attempts before giving up (Graph API occasionally resets TLS). */
@@ -56,43 +66,50 @@ async function graphPost(url: string, body: unknown): Promise<Response> {
 }
 
 /**
- * Sends an OTP through a WhatsApp "authentication" template. The code is passed
- * to the template body and (unless disabled) to its copy-code button — the
- * structure Meta requires for authentication-category templates.
+ * Sends any approved WhatsApp template to one recipient.
  *
- * @param toE164 recipient in E.164 (e.g. +919876543210)
- * @param code   the one-time code
+ * This is the single place a template message leaves the server: OTP
+ * (authentication category) and the order/refund lifecycle notifications
+ * (utility category) both funnel through here, so retry behaviour, error
+ * decoding and the Graph version are defined once.
+ *
+ * @param toE164     recipient in E.164 (e.g. +919876543210)
+ * @param name       the approved template's name
+ * @param lang       its language code (e.g. "en", "en_US") — must match Meta exactly
+ * @param bodyParams the {{1}}, {{2}}, … substitutions, in order
+ * @param extra      extra template components (e.g. a button) appended after the body
  * @returns the WhatsApp message id
  */
-export async function sendWhatsappOtp(toE164: string, code: string): Promise<string> {
+export async function sendWhatsappTemplate(
+  toE164: string,
+  name: string,
+  lang: string,
+  bodyParams: string[] = [],
+  extra: Array<Record<string, unknown>> = [],
+): Promise<string> {
   // WhatsApp expects digits only, without the leading '+'.
   const to = toE164.replace(/^\+/, "");
   const url = `https://graph.facebook.com/${GRAPH_VERSION}/${env.WHATSAPP_PHONE_NUMBER_ID}/messages`;
 
-  const components: Array<Record<string, unknown>> = [
-    { type: "body", parameters: [{ type: "text", text: code }] },
-  ];
-
-  // Authentication templates include a copy-code / one-tap button that also
-  // receives the code. Disable with WHATSAPP_OTP_BUTTON=false if your template
-  // has no button (a plain utility template).
-  if (env.WHATSAPP_OTP_BUTTON !== "false") {
+  const components: Array<Record<string, unknown>> = [];
+  if (bodyParams.length > 0) {
     components.push({
-      type: "button",
-      sub_type: "url",
-      index: "0",
-      parameters: [{ type: "text", text: code }],
+      type: "body",
+      parameters: bodyParams.map((text) => ({ type: "text", text })),
     });
   }
+  components.push(...extra);
 
   const res = await graphPost(url, {
     messaging_product: "whatsapp",
     to,
     type: "template",
     template: {
-      name: env.WHATSAPP_TEMPLATE_NAME,
-      language: { code: env.WHATSAPP_TEMPLATE_LANG },
-      components,
+      name,
+      language: { code: lang },
+      // Meta rejects an empty `components` array on a template that takes no
+      // variables, so omit the key entirely in that case.
+      ...(components.length > 0 ? { components } : {}),
     },
   });
 
@@ -106,9 +123,43 @@ export async function sendWhatsappOtp(toE164: string, code: string): Promise<str
       payload.error?.error_data?.details ??
       payload.error?.message ??
       `WhatsApp request failed (HTTP ${res.status})`;
-    const code2 = payload.error?.code ? ` [WA ${payload.error.code}]` : "";
-    throw new ApiError(502, `${detail}${code2}`);
+    const waCode = payload.error?.code ? ` [WA ${payload.error.code}]` : "";
+    throw new ApiError(502, `${detail}${waCode}`);
   }
 
   return payload.messages?.[0]?.id ?? "";
+}
+
+/**
+ * Sends an OTP through a WhatsApp "authentication" template. The code is passed
+ * to the template body and (unless disabled) to its copy-code button — the
+ * structure Meta requires for authentication-category templates.
+ *
+ * @param toE164 recipient in E.164 (e.g. +919876543210)
+ * @param code   the one-time code
+ * @returns the WhatsApp message id
+ */
+export async function sendWhatsappOtp(toE164: string, code: string): Promise<string> {
+  // Authentication templates include a copy-code / one-tap button that also
+  // receives the code. Disable with WHATSAPP_OTP_BUTTON=false if your template
+  // has no button (a plain utility template).
+  const extra =
+    env.WHATSAPP_OTP_BUTTON !== "false"
+      ? [
+          {
+            type: "button",
+            sub_type: "url",
+            index: "0",
+            parameters: [{ type: "text", text: code }],
+          },
+        ]
+      : [];
+
+  return sendWhatsappTemplate(
+    toE164,
+    env.WHATSAPP_TEMPLATE_NAME,
+    env.WHATSAPP_TEMPLATE_LANG,
+    [code],
+    extra,
+  );
 }

@@ -8,6 +8,7 @@ import { computeDiscount } from "../lib/offers.js";
 import { stopShipmentsForOrder, markShipmentsCancelled } from "../lib/shipping/stopShipments.js";
 import { retireCreateJob } from "../services/shipping/jobs.js";
 import { softDeleteReady } from "../lib/softDelete.js";
+import { notifyOrderEvent } from "../lib/orderNotifications.js";
 
 /**
  * POST /api/orders — creates an order; prices are resolved server-side.
@@ -189,6 +190,22 @@ export async function cancelOrder(req: Request, res: Response) {
   await markShipmentsCancelled(stoppedShipments);
 
   await restoreInventory((order.items as OrderItemRow[]) ?? []);
+
+  /*
+   * Confirm the cancellation on WhatsApp, and — for a prepaid order, where
+   * money actually left the customer's account — follow it with the refund
+   * notice. COD collected nothing, so refundStatus is "None" and no refund
+   * message is sent.
+   *
+   * Neither is awaited: the cancellation is committed, the courier is stopped,
+   * and the shopper's response must not wait on Meta. The id is passed rather
+   * than `updated` (typed unknown by the retry loop above) so the notifier
+   * reads the row it needs itself.
+   */
+  void notifyOrderEvent("order_cancelled", id);
+  if (refundStatus === "Initiated") {
+    void notifyOrderEvent("refund_initiated", id);
+  }
 
   res.json({ success: true, ok: true, message: "Order cancelled.", order: updated });
 }

@@ -1,6 +1,7 @@
 import { supabaseAdmin } from "./supabase.js";
 import { ApiError } from "../middleware/errors.js";
 import { enqueueCreateShipmentJob, fireShipmentJobNow } from "../services/shipping/jobs.js";
+import { notifyOrderEvent } from "./orderNotifications.js";
 
 /**
  * How long checkout will wait for the courier before handing the shipment
@@ -236,6 +237,25 @@ export async function persistOrder(params: {
       fireShipmentJobNow(order.id as string),
       new Promise((resolve) => setTimeout(resolve, CHECKOUT_SHIPMENT_WAIT_MS)),
     ]);
+
+    /*
+     * Tell the customer their order is in. Deliberately NOT awaited, even
+     * though the shipment above is: the courier call earns its bounded wait
+     * because a lost manifest strands the parcel, whereas a WhatsApp message
+     * that arrives a second after the confirmation page costs nothing. Meta is
+     * never given the chance to hold checkout open.
+     *
+     * The row is passed in rather than the id so this doesn't re-read the
+     * order — `discount` is only on `order` after the best-effort update above.
+     */
+    void notifyOrderEvent("order_confirmed", {
+      id: order.id as string,
+      phone: params.phone ?? null,
+      full_name: params.fullName ?? null,
+      subtotal: cart.subtotal,
+      discount,
+      currency: cart.currency,
+    });
   }
 
   return { ...order, ...shipFields, discount, offer_code: params.offerCode ?? null, items: cart.lineItems };

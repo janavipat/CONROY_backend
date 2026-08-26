@@ -2,6 +2,7 @@ import { supabaseAdmin } from "../../lib/supabase.js";
 import { ApiError } from "../../middleware/errors.js";
 import { delhiveryProvider } from "../../lib/shipping/providers/delhivery/index.js";
 import type { ShipAddress } from "../../lib/shipping/provider.js";
+import { notifyOrderEvent } from "../../lib/orderNotifications.js";
 
 /**
  * Denim is predictable — used only when a product's weight_g hasn't been set
@@ -200,6 +201,12 @@ export async function createShipmentForOrder(orderId: string): Promise<CreateShi
   if (orderUpdateErr) {
     console.error(`Order ${orderId} shipped (waybill ${result.waybill}) but fulfillment_status update failed:`, orderUpdateErr.message);
   }
+
+  // The customer's "it's on the way" message, with the tracking number. Sent
+  // here rather than on the courier's own Shipped scan because the waybill is
+  // what makes the message useful, and it exists from manifest onwards. The
+  // once-per-order guard means the later Shipped scan won't repeat it.
+  void notifyOrderEvent("order_shipped", orderId, { waybill: result.waybill });
 
   return {
     ok: true,

@@ -36,6 +36,27 @@ const EnvSchema = z.object({
   WHATSAPP_TEMPLATE_LANG: z.string().default("en_US"),
   WHATSAPP_OTP_BUTTON: z.string().default("true"),
 
+  // WhatsApp order/refund lifecycle notifications ("utility" templates, sent
+  // from the same number as OTP). Each template name is overridable so a
+  // rename in WhatsApp Manager is a config change, not a code change.
+  // Set WHATSAPP_NOTIFY_ENABLED=false to silence every lifecycle message
+  // without unsetting the shared credentials that OTP also depends on.
+  WHATSAPP_NOTIFY_ENABLED: z.string().default("true"),
+  // Language of the notification templates. Empty → falls back to
+  // WHATSAPP_TEMPLATE_LANG. Must match Meta exactly ("en" ≠ "en_US").
+  WHATSAPP_NOTIFY_LANG: z.string().default(""),
+  // The WhatsApp Business Account id (WhatsApp Manager → Account tools).
+  // Only needed by GET /api/admin/whatsapp/templates, which reads the live
+  // templates back from Meta to verify names and variable counts.
+  WHATSAPP_BUSINESS_ACCOUNT_ID: z.string().default(""),
+  WHATSAPP_TPL_ORDER_CONFIRMED: z.string().default("conroy_order_confirmed"),
+  WHATSAPP_TPL_ORDER_SHIPPED: z.string().default("conroy_order_shipped"),
+  WHATSAPP_TPL_ORDER_OUT_FOR_DELIVERY: z.string().default("conroy_order_out_for_delivery"),
+  WHATSAPP_TPL_ORDER_DELIVERED: z.string().default("conroy_order_delivered"),
+  WHATSAPP_TPL_ORDER_CANCELLED: z.string().default("conroy_order_cancelled"),
+  WHATSAPP_TPL_REFUND_INITIATED: z.string().default("conroy_refund_initiated"),
+  WHATSAPP_TPL_REFUND_COMPLETED: z.string().default("conroy_refund_completed"),
+
   // Twilio (OTP SMS provider, sent directly from the backend). Auth token is
   // SECRET — server-side only. TWILIO_FROM must be a Twilio-owned number (or use
   // a Messaging Service SID); a personal mobile number can't be a sender.

@@ -1,5 +1,6 @@
 import { supabaseAdmin } from "../../lib/supabase.js";
 import type { NormalizedShipmentEvent } from "../../lib/shipping/provider.js";
+import { eventForFulfillmentStatus, notifyOrderEvent } from "../../lib/orderNotifications.js";
 
 /**
  * Mirrors status-map.ts's ranks, but keyed by the fulfillment_status STRING
@@ -86,5 +87,15 @@ export async function applyScan(event: NormalizedShipmentEvent): Promise<ApplySc
   if (event.rank < currentRank) return { applied: false, deduped: false, unmatched: false };
 
   await supabaseAdmin.from("orders").update({ fulfillment_status: event.internalStatus }).eq("id", shipment.order_id);
+
+  // Tell the customer, but only about states they care about — Shipped, Out For
+  // Delivery, Delivered. Reached only on a real forward move (every early
+  // return above skips it), so a replayed or out-of-order scan can't message
+  // twice; notifyOrderEvent's once-per-order guard is the second line.
+  const customerEvent = eventForFulfillmentStatus(event.internalStatus);
+  if (customerEvent) {
+    void notifyOrderEvent(customerEvent, shipment.order_id as string, { waybill: event.waybill });
+  }
+
   return { applied: true, deduped: false, unmatched: false };
 }

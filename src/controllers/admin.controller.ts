@@ -5,6 +5,7 @@ import { uploadProductImage } from "../lib/storage.js";
 import { stopShipmentsForOrder, markShipmentsCancelled } from "../lib/shipping/stopShipments.js";
 import { retireCreateJob } from "../services/shipping/jobs.js";
 import { softDeleteReady } from "../lib/softDelete.js";
+import { notifyOrderEvent } from "../lib/orderNotifications.js";
 import {
   adminProductSchema,
   updateReturnStatusSchema,
@@ -823,6 +824,26 @@ export async function listAllReturns(_req: Request, res: Response) {
   res.json({ ok: true, count: returns.length, data: returns });
 }
 
+/**
+ * A return moving to this status means money is moving, so the customer gets a
+ * WhatsApp update. Only refund resolutions qualify — a replacement never pays
+ * anything back, so "approved" on a replacement stays silent.
+ *
+ *  approved            → refund_initiated  ("we've started your refund")
+ *  refunded, completed → refund_completed  ("the money has gone back")
+ *
+ * requested/rejected/replaced are deliberately absent: nothing has been paid.
+ */
+function refundEventForReturnStatus(
+  status: string,
+  resolution: string,
+): "refund_initiated" | "refund_completed" | null {
+  if (resolution !== "refund") return null;
+  if (status === "approved") return "refund_initiated";
+  if (status === "refunded" || status === "completed") return "refund_completed";
+  return null;
+}
+
 /** PATCH /api/admin/returns/:id — updates a return's processing status. */
 export async function updateReturnStatus(req: Request, res: Response) {
   const { id } = req.params;
@@ -832,10 +853,29 @@ export async function updateReturnStatus(req: Request, res: Response) {
     .from("returns")
     .update({ status, updated_at: new Date().toISOString() })
     .eq("id", id)
-    .select()
+    .select("*, items:return_items(*)")
     .maybeSingle();
   if (error) throw new ApiError(500, error.message);
   if (!data) throw new ApiError(404, `Return not found: ${id}`);
+
+  // Keep the order's refund_status in step, so the customer's order page and
+  // the WhatsApp message agree. Best-effort: an un-migrated database (no
+  // cancel-order.sql) must not fail an otherwise-valid status change.
+  const refundEvent = refundEventForReturnStatus(status, String(data.resolution ?? ""));
+  if (refundEvent && data.order_id) {
+    const refundStatus = refundEvent === "refund_completed" ? "Completed" : "Initiated";
+    const { error: oErr } = await supabaseAdmin
+      .from("orders")
+      .update({ refund_status: refundStatus })
+      .eq("id", data.order_id);
+    if (oErr) console.warn("Order refund_status not updated:", oErr.message);
+
+    // The refund is for the returned lines only, which is usually less than the
+    // order total — send that figure, not the order's.
+    void notifyOrderEvent(refundEvent, data.order_id as string, {
+      amount: returnValue(data as Row),
+    });
+  }
 
   res.json({ ok: true, message: "Return status updated.", data });
 }
